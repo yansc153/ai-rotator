@@ -1,4 +1,8 @@
-"""Fetch 1-hour intraday OHLCV bars for all universe symbols.
+"""Fetch 1-hour intraday OHLCV bars for screened candidate symbols.
+
+Source of symbols (in priority order):
+    1. data/candidates.json  — top 150 from screen_candidates.py (3357-stock scan)
+    2. config/universe.yaml  — legacy 30-stock fallback if candidates.json is absent
 
 Saves as:  data/raw/US_NVDA_1h.csv
            data/raw/CN_688256_1h.csv
@@ -8,6 +12,7 @@ Run before each Discord brief so session-aware scoring has fresh intraday data.
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -15,7 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _common import PROJECT_ROOT, load_env_file
-from tradingagents.agents.rotation.common import load_universe, normalize_symbol_for_file
+from tradingagents.agents.rotation.common import normalize_symbol_for_file
+
+ROOT = Path(__file__).resolve().parents[1]
+CANDIDATES_JSON = ROOT / "data" / "candidates.json"
 
 RAW_DIR = PROJECT_ROOT.parent / "data" / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -104,18 +112,36 @@ def fetch_hk_intraday(symbol: str) -> bool:
         return False
 
 
+def _load_symbols() -> list[tuple[str, str]]:
+    """Return [(market, symbol), …] for intraday fetching.
+
+    Uses candidates.json (top 150 from 3357-stock screen) when available;
+    falls back to legacy universe.yaml (30 stocks) otherwise.
+    """
+    if CANDIDATES_JSON.exists():
+        data = json.loads(CANDIDATES_JSON.read_text())
+        candidates = data.get("candidates", [])
+        print(f"[fetch_intraday] Using candidates.json ({len(candidates)} symbols)")
+        return [(c["market"], c["symbol"]) for c in candidates]
+
+    from tradingagents.agents.rotation.common import load_universe
+    items = load_universe()
+    print(f"[fetch_intraday] candidates.json not found — using universe.yaml ({len(items)} symbols)")
+    return [(item.market, item.symbol) for item in items]
+
+
 def main() -> None:
     load_env_file()
-    universe = load_universe()
+    symbols = _load_symbols()
     ok = fail = 0
-    for item in universe:
+    for market, symbol in symbols:
         try:
-            if item.market == "US":
-                success = fetch_us_intraday(item.symbol)
-            elif item.market == "CN":
-                success = fetch_cn_intraday(item.symbol)
-            elif item.market == "HK":
-                success = fetch_hk_intraday(item.symbol)
+            if market == "US":
+                success = fetch_us_intraday(symbol)
+            elif market == "CN":
+                success = fetch_cn_intraday(symbol)
+            elif market == "HK":
+                success = fetch_hk_intraday(symbol)
             else:
                 continue
             if success:
@@ -123,7 +149,7 @@ def main() -> None:
             else:
                 fail += 1
         except Exception as exc:
-            print(f"  {item.market} {item.symbol}: ERROR — {exc}")
+            print(f"  {market} {symbol}: ERROR — {exc}")
             fail += 1
     print(f"\n完成: {ok} 成功 / {fail} 失败")
 

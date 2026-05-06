@@ -5,3 +5,8 @@ storage/ai_rotator.db
 __pycache__/
 *.pyc
 .DS_Store
+
+# Generated per-run — do not commit
+data/daily_cache.db
+data/candidates.json
+data/raw/
