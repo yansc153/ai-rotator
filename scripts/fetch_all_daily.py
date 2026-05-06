@@ -78,7 +78,7 @@ def _upsert(conn: sqlite3.Connection, rows: list[dict]) -> int:
     return len(rows)
 
 
-# ── CN: akshare spot (one call, full market) ─────────────────────────────────
+# ── CN helpers ────────────────────────────────────────────────────────────────
 
 def _cn_spot_code_to_symbol(code: str) -> str | None:
     """Convert akshare spot code to our standard symbol.
@@ -95,38 +95,154 @@ def _cn_spot_code_to_symbol(code: str) -> str | None:
     return None  # BJ or unknown
 
 
+def _cn_symbol_to_yf(symbol: str) -> str:
+    """Convert our CN symbol to yfinance format.
+
+    yfinance uses '.SS' for Shanghai, '.SZ' for Shenzhen (same as ours).
+    '600941.SH' → '600941.SS'
+    '300308.SZ' → '300308.SZ'   (unchanged)
+    '688256.SH' → '688256.SS'   (STAR Market is also Shanghai)
+    """
+    if symbol.endswith(".SH"):
+        return symbol[:-3] + ".SS"
+    return symbol  # .SZ unchanged
+
+
+def _yf_symbol_to_cn(yf_sym: str) -> str:
+    """Reverse of _cn_symbol_to_yf — used when mapping results back."""
+    if yf_sym.endswith(".SS"):
+        return yf_sym[:-3] + ".SH"
+    return yf_sym
+
+
+# ── CN: 30-day history via yfinance + today's spot via akshare ────────────────
+
 def fetch_cn(universe: pd.DataFrame, conn: sqlite3.Connection) -> int:
+    """Fetch CN stocks in two passes:
+
+    Pass 1 — yfinance batch (fast, ~30s for 2276 stocks in 400-ticker chunks):
+        Gives 30 calendar days of daily OHLCV history.
+        Needed so screen_candidates.py sees ≥3 days and doesn't filter everything out.
+
+    Pass 2 — akshare spot (one call, ~18s):
+        Overwrites today's row with the most current intraday close.
+        yfinance daily bars only include the *previous* close, so this keeps
+        today's price accurate when markets are open.
+    """
     import akshare as ak
 
-    cn_symbols = set(universe[universe.market == "CN"]["symbol"])
+    cn = universe[universe.market == "CN"]
+    cn_symbols = set(cn["symbol"])
     today = date.today().isoformat()
 
-    print("  CN: calling ak.stock_zh_a_spot() ...", flush=True)
-    t0 = time.time()
-    df = ak.stock_zh_a_spot()
-    print(f"  CN: {len(df)} rows fetched in {time.time()-t0:.1f}s", flush=True)
+    # ── Pass 1: yfinance history ───────────────────────────────────────────────
+    yf_tickers = [_cn_symbol_to_yf(s) for s in cn["symbol"].tolist()]
+    # reverse map: yfinance ticker → our symbol
+    yf_to_sym = {_cn_symbol_to_yf(s): s for s in cn["symbol"].tolist()}
 
-    rows = []
+    print(f"  CN: {len(yf_tickers)} tickers via yf.download (30d history) ...", flush=True)
+    t0 = time.time()
+    hist_saved = _yf_batch_cn(yf_tickers, yf_to_sym, conn)
+    print(f"  CN yf: {hist_saved} rows stored in {time.time()-t0:.1f}s", flush=True)
+
+    # ── Pass 2: akshare spot (today's live price) ──────────────────────────────
+    print("  CN: calling ak.stock_zh_a_spot() for today's close ...", flush=True)
+    t0 = time.time()
+    try:
+        df = ak.stock_zh_a_spot()
+    except Exception as exc:
+        print(f"  CN spot: FAILED — {exc}", flush=True)
+        return hist_saved
+    print(f"  CN spot: {len(df)} rows fetched in {time.time()-t0:.1f}s", flush=True)
+
+    spot_rows = []
     for _, row in df.iterrows():
         sym = _cn_spot_code_to_symbol(str(row.get("代码", "")))
         if sym is None or sym not in cn_symbols:
             continue
         try:
-            rows.append({
+            close = float(row.get("最新价", row.get("close", 0)) or 0)
+            if close <= 0:
+                continue
+            spot_rows.append({
                 "date": today, "market": "CN", "symbol": sym,
-                "open":   float(row.get("今开",  row.get("open",  0)) or 0),
-                "high":   float(row.get("最高",  row.get("high",  0)) or 0),
-                "low":    float(row.get("最低",  row.get("low",   0)) or 0),
-                "close":  float(row.get("最新价", row.get("close", 0)) or 0),
-                "volume": float(row.get("成交量", row.get("volume", 0)) or 0),
+                "open":       float(row.get("今开",  row.get("open",  close)) or close),
+                "high":       float(row.get("最高",  row.get("high",  close)) or close),
+                "low":        float(row.get("最低",  row.get("low",   close)) or close),
+                "close":      close,
+                "volume":     float(row.get("成交量", row.get("volume", 0)) or 0),
                 "pct_change": float(row.get("涨跌幅", 0) or 0),
             })
         except (ValueError, TypeError):
             continue
 
-    saved = _upsert(conn, rows)
-    print(f"  CN: {saved}/{len(cn_symbols)} symbols stored", flush=True)
-    return saved
+    spot_saved = _upsert(conn, spot_rows)
+    print(f"  CN spot: {spot_saved}/{len(cn_symbols)} today rows upserted", flush=True)
+    return hist_saved + spot_saved  # hist rows + today's updates
+
+
+def _yf_batch_cn(
+    yf_tickers: list[str],
+    yf_to_sym: dict[str, str],
+    conn: sqlite3.Connection,
+) -> int:
+    """Download CN 30-day history in 400-ticker batches via yfinance."""
+    import yfinance as yf
+
+    total = 0
+    for i in range(0, len(yf_tickers), YF_CHUNK):
+        chunk_yf = yf_tickers[i: i + YF_CHUNK]
+        try:
+            raw = yf.download(chunk_yf, period=YF_PERIOD, auto_adjust=True,
+                              progress=False, threads=True)
+        except Exception as exc:
+            print(f"  CN yf chunk {i//YF_CHUNK+1}: download error — {exc}", flush=True)
+            continue
+
+        if raw.empty:
+            continue
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            tickers_in = raw.columns.get_level_values(1).unique()
+        else:
+            raw.columns = pd.MultiIndex.from_tuples(
+                [(c, chunk_yf[0]) for c in raw.columns], names=["Price", "Ticker"]
+            )
+            tickers_in = [chunk_yf[0]]
+
+        rows = []
+        for yf_ticker in tickers_in:
+            our_sym = yf_to_sym.get(yf_ticker)
+            if not our_sym:
+                continue
+            try:
+                sub = raw.xs(yf_ticker, axis=1, level="Ticker").dropna(how="all")
+            except KeyError:
+                continue
+            sub = sub.rename(columns=str.lower)
+            for idx_date, drow in sub.iterrows():
+                close = drow.get("close")
+                if pd.isna(close) or close <= 0:
+                    continue
+                prev_idx = sub.index.get_loc(idx_date) - 1
+                prev_close = sub.iloc[prev_idx]["close"] if prev_idx >= 0 else close
+                pct = (close - prev_close) / prev_close * 100 if prev_close else 0
+                rows.append({
+                    "date":       str(idx_date)[:10],
+                    "market":     "CN",
+                    "symbol":     our_sym,
+                    "open":       float(drow.get("open",   close)),
+                    "high":       float(drow.get("high",   close)),
+                    "low":        float(drow.get("low",    close)),
+                    "close":      float(close),
+                    "volume":     float(drow.get("volume", 0) or 0),
+                    "pct_change": round(pct, 4),
+                })
+        saved = _upsert(conn, rows)
+        total += saved
+        print(f"  CN yf chunk {i//YF_CHUNK+1}/{(len(yf_tickers)-1)//YF_CHUNK+1}: "
+              f"{saved} rows stored", flush=True)
+    return total
 
 
 # ── HK + US: yfinance batch download ─────────────────────────────────────────
