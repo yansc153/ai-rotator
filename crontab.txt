@@ -1,0 +1,21 @@
+# ─── AI Rotator — Local Crontab (UTC times) ─────────────────────────────────
+# Install: crontab /path/to/ai-rotator/crontab.txt
+# User timezone: Asia/Shanghai (UTC+8)
+
+# [AH] Fetch A+HK data after market close (16:30 UTC+8 = 08:30 UTC), Mon-Fri
+30 8 * * 1-5  cd "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/scripts" && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 fetch_market_data.py >> "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/fetch_ah.log" 2>&1
+
+# [AH] Run AH rotation report after fetch (09:00 UTC = 17:00 UTC+8), Mon-Fri
+0 9 * * 1-5   cd "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/scripts" && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 run_daily_rotation.py --market AH >> "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/rotation_ah.log" 2>&1
+
+# [US] Fetch US data after Wall Street close (15:00 UTC = 23:00 UTC+8), Mon-Fri
+0 15 * * 1-5  cd "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/scripts" && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 fetch_market_data.py >> "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/fetch_us.log" 2>&1
+
+# [US] Run US rotation report after fetch (15:30 UTC = 23:30 UTC+8), Mon-Fri
+30 15 * * 1-5 cd "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/scripts" && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 run_daily_rotation.py --market US >> "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/rotation_us.log" 2>&1
+
+# [Brief] Send morning Discord brief (23:00 UTC = 07:00 UTC+8 next day), Sun-Thu
+0 23 * * 0-4  cd "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/scripts" && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 send_discord_brief.py >> "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/brief.log" 2>&1
+
+# [Review] T+1 outcome reviewer (23:30 UTC = 07:30 UTC+8), Sun-Thu
+30 23 * * 0-4 cd "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/scripts" && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 run_reviewer.py >> "/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/reviewer.log" 2>&1

@@ -1,0 +1,20 @@
+rules:
+  - rule_id: bis_domestic_substitution
+    trigger_keywords: ["BIS", "Entity List", "export controls", "advanced computing"]
+    beneficiaries: ["688256.SH", "688041.SH", "688981.SH"]
+    expected_sign: positive
+    verified: true
+    average_excess_return_20d: 0.1487
+    half_life_days: 5
+    last_verified_date: "2024-12-02"
+    failure_examples:
+      - event_date: "2025-04-09"
+        note: "H20 license requirement failed to produce sustained positive CAR"
+  - rule_id: micron_memory_upcycle
+    trigger_keywords: ["Micron earnings", "HBM revenue", "DRAM pricing"]
+    beneficiaries: ["603986.SH", "688008.SH"]
+    expected_sign: positive
+    verified: mixed
+    average_excess_return_20d: 0.1434
+    half_life_days: 3
+    last_verified_date: "2024-12-18"

@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import date
+from pathlib import Path
+from uuid import uuid4
+
+from _common import PROJECT_ROOT, dump_json, load_env_file
+from storage.sqlite import insert_recommendations
+from tradingagents.agents.rotation.price_engine import PriceEngineConfig, build_short_term_plan, build_swing_plan
+from tradingagents.agents.rotation.sector_rotation_agent import create_sector_rotation_agent
+from tradingagents.agents.rotation.universe_agent import create_universe_agent
+
+
+SHORT_CFG = PriceEngineConfig(long_k1=1.6, long_k2=2.6, long_k3=0.8, short_k1=1.2, short_k2=2.2, short_k3=0.6, min_rr=1.5)
+
+
+def build_rotation(market: str, trade_date: str) -> dict:
+    universe_state = create_universe_agent()({"weekly_rotation_top3": []})
+    rotation_state = create_sector_rotation_agent()({
+        "market": market,
+        "trade_date": trade_date,
+        "universe_pools": universe_state["universe_pools"],
+    })
+    # Use enriched candidate_set for ambush pool so LLM theses carry through to swings
+    enriched_ambush = [r for r in rotation_state["candidate_set"] if r.get("pool") == "ambush"]
+    if not enriched_ambush:
+        enriched_ambush = universe_state["universe_pools"].get("ambush", [])
+    recommendations = build_recommendations(
+        rotation_state["candidate_set"], enriched_ambush, trade_date, market
+    )
+    return {
+        "trade_date": trade_date,
+        "market": market,
+        "leading_sectors_today": rotation_state["leading_sectors_today"],
+        "fading_sectors_today": rotation_state["fading_sectors_today"],
+        "cross_market_signals": rotation_state["cross_market_signals"],
+        "transmission_events": rotation_state["transmission_events"],
+        "candidate_set": rotation_state["candidate_set"],
+        "recommendations": recommendations,
+    }
+
+
+def _market_matches(row_market: str, market: str) -> bool:
+    if market == "ALL":
+        return True
+    if market == "AH":
+        return row_market in ("CN", "HK")
+    return row_market == market
+
+
+def build_recommendations(
+    candidate_set: list[dict], ambush_pool: list[dict], trade_date: str, market: str
+) -> list[dict]:
+    shorts: list[dict] = []
+    # Short-term: from day_active candidate_set
+    for row in candidate_set:
+        if not _market_matches(row["market"], market):
+            continue
+        short_plan = build_short_term_plan(
+            row["current_price"],
+            row["atr_pct"],
+            "LONG",
+            SHORT_CFG,
+            market=row["market"],
+            short_filters=[],
+        )
+        if not short_plan["rejected"]:
+            shorts.append({
+                **row,
+                "side": "LONG",
+                "horizon": "short",
+                "plan": short_plan,
+                "thesis": row.get("llm_thesis") or f"{row['sector']} 动量突破",
+                "conviction": min(0.95, 0.55 + row["rotation_score"] / 200),
+            })
+    shorts = sorted(shorts, key=lambda item: item["rotation_score"], reverse=True)[:5]
+
+    # Swing: from ambush pool (stocks down ≥30% from 1yr high — left-side entry)
+    swings: list[dict] = []
+    for row in ambush_pool:
+        if not _market_matches(row["market"], market):
+            continue
+        swing_plan = build_swing_plan(row["current_price"], row["atr14"], market=row["market"])
+        if not swing_plan.get("rejected"):
+            swings.append({
+                **row,
+                "side": "LONG",
+                "horizon": "swing",
+                "plan": swing_plan,
+                "thesis": row.get("llm_thesis") or f"{row['sector']} 左侧布局",
+                "conviction": min(0.90, 0.50 + abs(row.get("drawdown_1y", 0)) * 0.5),
+            })
+    swings = sorted(swings, key=lambda item: item["priority_score"], reverse=True)[:3]
+    run_id = str(uuid4())
+    insert_recommendations(
+        [
+            {
+                "run_id": run_id,
+                "trade_date": trade_date,
+                "market": item["market"],
+                "symbol": item["symbol"],
+                "company_name": item["company_name"],
+                "side": item["side"],
+                "horizon": item["horizon"],
+                "sector": item["sector"],
+                "pool": item["pool"],
+                "thesis": item["thesis"],
+                "conviction": item["conviction"],
+                "current_price": item["current_price"],
+                "entry_low": item["plan"].get("entry_low"),
+                "entry_high": item["plan"].get("entry_high"),
+                "target_1": item["plan"].get("target_1"),
+                "target_2": item["plan"].get("target_2"),
+                "stop_loss": item["plan"].get("stop_loss"),
+                "rr": item["plan"].get("rr"),
+                "leading_sector_json": json.dumps(item, ensure_ascii=False),
+                "transmission_event_json": json.dumps([], ensure_ascii=False),
+                "created_at": trade_date,
+            }
+            for item in (shorts + swings)
+        ]
+    )
+    return shorts + swings
+
+
+def main() -> None:
+    load_env_file()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--market", required=True, choices=["US", "AH", "ALL"])
+    parser.add_argument("--date", default=str(date.today()))
+    args = parser.parse_args()
+    payload = build_rotation(args.market, args.date)
+    out_path = PROJECT_ROOT / "reports" / "daily" / f"{args.date}-{args.market.lower()}-rotation.json"
+    dump_json(out_path, payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

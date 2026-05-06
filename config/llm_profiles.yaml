@@ -1,0 +1,16 @@
+profiles:
+  default:
+    quick: "glm-4.7"
+    deep: "claude-sonnet-4-5"
+    provider_quick: "glm"
+    provider_deep: "anthropic"
+  quality:
+    quick: "claude-haiku-4-5"
+    deep: "claude-sonnet-4-5"
+    provider_quick: "anthropic"
+    provider_deep: "anthropic"
+  budget:
+    quick: "deepseek-chat"
+    deep: "glm-4-plus"
+    provider_quick: "deepseek"
+    provider_deep: "glm"

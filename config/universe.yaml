@@ -1,0 +1,211 @@
+symbols:
+  - market: CN
+    symbol: "300308.SZ"
+    company_name: "中际旭创"
+    sector: "optical_modules_400g_800g"
+    chain_group: "optical_interconnect"
+    role: "leader"
+    priority: 96
+  - market: CN
+    symbol: "688256.SH"
+    company_name: "寒武纪"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "leader"
+    priority: 94
+  - market: CN
+    symbol: "002371.SZ"
+    company_name: "北方华创"
+    sector: "lithography_process"
+    chain_group: "semiconductor_process"
+    role: "leader"
+    priority: 92
+  - market: CN
+    symbol: "300502.SZ"
+    company_name: "新易盛"
+    sector: "optical_modules_400g_800g"
+    chain_group: "optical_interconnect"
+    role: "leader"
+    priority: 92
+  - market: CN
+    symbol: "688041.SH"
+    company_name: "海光信息"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "leader"
+    priority: 92
+  - market: CN
+    symbol: "300394.SZ"
+    company_name: "天孚通信"
+    sector: "optical_modules_400g_800g"
+    chain_group: "optical_interconnect"
+    role: "leader"
+    priority: 90
+  - market: CN
+    symbol: "688012.SH"
+    company_name: "中微公司"
+    sector: "lithography_process"
+    chain_group: "semiconductor_process"
+    role: "leader"
+    priority: 90
+  - market: CN
+    symbol: "002230.SZ"
+    company_name: "科大讯飞"
+    sector: "hyperscaler_infra"
+    chain_group: "cloud_software_platform"
+    role: "leader"
+    priority: 88
+  - market: CN
+    symbol: "002281.SZ"
+    company_name: "光迅科技"
+    sector: "optical_modules_400g_800g"
+    chain_group: "optical_interconnect"
+    role: "leader"
+    priority: 88
+  - market: CN
+    symbol: "600584.SH"
+    company_name: "长电科技"
+    sector: "hbm_memory"
+    chain_group: "memory_packaging"
+    role: "leader"
+    priority: 86
+  - market: CN
+    symbol: "688072.SH"
+    company_name: "拓荆科技"
+    sector: "lithography_process"
+    chain_group: "semiconductor_process"
+    role: "deposition"
+    priority: 86
+  - market: CN
+    symbol: "688981.SH"
+    company_name: "中芯国际"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "foundry"
+    priority: 84
+  - market: HK
+    symbol: "00981.HK"
+    company_name: "中芯国际"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "foundry"
+    priority: 88
+  - market: HK
+    symbol: "09988.HK"
+    company_name: "阿里巴巴"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "ai_compute_demand"
+    priority: 86
+  - market: HK
+    symbol: "00700.HK"
+    company_name: "腾讯控股"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "ai_compute_demand"
+    priority: 86
+  - market: HK
+    symbol: "01347.HK"
+    company_name: "华虹半导体"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "foundry"
+    priority: 84
+  - market: HK
+    symbol: "03888.HK"
+    company_name: "Kingsoft"
+    sector: "hyperscaler_infra"
+    chain_group: "cloud_software_platform"
+    role: "candidate"
+    priority: 82
+  - market: HK
+    symbol: "06082.HK"
+    company_name: "Biren Technology"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "candidate"
+    priority: 80
+  - market: HK
+    symbol: "09880.HK"
+    company_name: "UBTECH Robotics"
+    sector: "humanoid_robotics"
+    chain_group: "robotics_endside"
+    role: "candidate"
+    priority: 78
+  - market: HK
+    symbol: "0020.HK"
+    company_name: "SenseTime"
+    sector: "hyperscaler_infra"
+    chain_group: "cloud_software_platform"
+    role: "candidate"
+    priority: 76
+  - market: US
+    symbol: "NVDA"
+    company_name: "NVIDIA"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "leader"
+    priority: 98
+  - market: US
+    symbol: "AMD"
+    company_name: "Advanced Micro Devices"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "leader"
+    priority: 94
+  - market: US
+    symbol: "AVGO"
+    company_name: "Broadcom"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "leader"
+    priority: 92
+  - market: US
+    symbol: "QCOM"
+    company_name: "Qualcomm"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "peer"
+    priority: 86
+  - market: US
+    symbol: "ARM"
+    company_name: "Arm Holdings"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "peer"
+    priority: 86
+  - market: US
+    symbol: "MRVL"
+    company_name: "Marvell Technology"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "peer"
+    priority: 88
+  - market: US
+    symbol: "MU"
+    company_name: "Micron Technology"
+    sector: "hbm_memory"
+    chain_group: "memory_packaging"
+    role: "leader"
+    priority: 84
+  - market: US
+    symbol: "TSM"
+    company_name: "Taiwan Semiconductor Manufacturing"
+    sector: "gpu_ai_accelerator"
+    chain_group: "compute_chips"
+    role: "foundry"
+    priority: 88
+  - market: US
+    symbol: "ASML"
+    company_name: "ASML"
+    sector: "lithography_process"
+    chain_group: "semiconductor_process"
+    role: "leader"
+    priority: 86
+  - market: US
+    symbol: "AMAT"
+    company_name: "Applied Materials"
+    sector: "lithography_process"
+    chain_group: "semiconductor_process"
+    role: "leader"
+    priority: 84
