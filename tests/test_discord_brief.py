@@ -73,6 +73,72 @@ def test_pick_with_diversity_handles_missing_rotation_score():
     assert all(r["symbol"] in {"A", "B", "C"} for r in result)
 
 
+# ─── session-aware scoring ────────────────────────────────────────────────
+
+def test_session_score_excludes_extremely_overbought():
+    """ret_5d > 35% must produce a strongly negative score regardless of base."""
+    import sys
+    sys.path.insert(0, "scripts")
+    from send_discord_brief import _session_score
+
+    rec = {"symbol": "XXX", "market": "US", "sector": "ai", "pool": "day_active",
+           "ret_5d": 0.44, "rotation_score": 200.0}
+    score = _session_score(rec, "morning")
+    assert score < 0, f"Expected negative score for overbought stock, got {score}"
+
+
+def test_session_score_healthy_stock_unchanged_morning():
+    """A non-overbought stock with no intraday data should keep its base score in morning."""
+    import sys
+    sys.path.insert(0, "scripts")
+    from send_discord_brief import _session_score
+
+    rec = {"symbol": "NVDA", "market": "US", "sector": "ai", "pool": "day_active",
+           "ret_5d": 0.10, "rotation_score": 100.0}
+    score = _session_score(rec, "morning")
+    # No intraday data (CSV won't exist for mock symbol) → pure base, no penalty
+    assert score == 100.0, f"Expected 100.0, got {score}"
+
+
+def test_build_brief_text_sessions_have_different_headers():
+    """Each session must have a distinct label in the output text."""
+    import sys
+    sys.path.insert(0, "scripts")
+    from send_discord_brief import build_brief_text
+
+    m = build_brief_text("2026-05-05", "morning")
+    d = build_brief_text("2026-05-05", "midday")
+    e = build_brief_text("2026-05-05", "evening")
+
+    assert "盘前早报" in m
+    assert "盘中播报" in d
+    assert "收盘晚报" in e
+
+
+def test_midday_excludes_us_stocks():
+    """Midday focus_markets={'CN','HK'} — US stocks must not appear in short_block."""
+    import sys
+    sys.path.insert(0, "scripts")
+    from send_discord_brief import build_brief_payload
+
+    payload = build_brief_payload("2026-05-05", "midday")
+    short_markets = {r["market"] for r in payload["short_block"]}
+    assert "US" not in short_markets, f"Midday short block contained US stocks: {short_markets}"
+
+
+def test_evening_excludes_ah_stocks():
+    """Evening focus_markets={'US'} — CN and HK stocks must not appear in short_block."""
+    import sys
+    sys.path.insert(0, "scripts")
+    from send_discord_brief import build_brief_payload
+
+    payload = build_brief_payload("2026-05-05", "evening")
+    short_markets = {r["market"] for r in payload["short_block"]}
+    assert "CN" not in short_markets and "HK" not in short_markets, (
+        f"Evening short block contained AH stocks: {short_markets}"
+    )
+
+
 def test_pick_with_diversity_market_guarantees():
     """_pick_with_diversity ensures ≥1 stock per market when capacity allows."""
     candidates = [

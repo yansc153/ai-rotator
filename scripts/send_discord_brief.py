@@ -16,6 +16,117 @@ import yaml
 from _common import PROJECT_ROOT, dump_json, load_env_file
 from run_daily_rotation import build_rotation
 
+# ── Session configuration ─────────────────────────────────────────────────
+# Each of the 3 daily pushes has a distinct label, focus, and scoring weights.
+# "intraday_weight" controls how much today's 1h bar movement adjusts the base score.
+SESSION_META = {
+    "morning": {
+        "label": "🌅 盘前早报",
+        "caption": "美股昨收 + A/HK开盘布局",
+        "intraday_weight": 0.0,        # Market not fully open; rely on daily scores
+        "overbought_5d": 0.25,         # Penalise if 5d ret > 25%
+        "overextended_intraday": 999,  # No intraday filter (no data yet)
+        "focus_markets": None,         # All markets: overview of the whole day
+    },
+    "midday": {
+        "label": "☀️ 盘中播报",
+        "caption": "A/HK盘中动量 + 当日焦点",
+        "intraday_weight": 0.6,        # Heavily weight what's actually moving today
+        "overbought_5d": 0.20,         # Tighter overbought filter midday
+        "overextended_intraday": 0.04, # Already up 4%+ today = skip
+        "focus_markets": {"CN", "HK"}, # AH markets are live; show AH stocks only
+    },
+    "evening": {
+        "label": "🌆 收盘晚报",
+        "caption": "A/HK收盘复盘 + 美股夜盘预判",
+        "intraday_weight": 0.4,
+        "overbought_5d": 0.20,
+        "overextended_intraday": 0.05,
+        "focus_markets": {"US"},       # US market opening; show US overnight plays
+    },
+}
+
+def _load_intraday_overlay(market: str, symbol: str) -> dict[str, float]:
+    """Return {ret_intraday, overextended} from latest 1h CSV for today.
+
+    ret_intraday = (last_bar_close - first_bar_close_today) / first_bar_close_today
+    Returns zeros if the file is missing or today has no bars (pre-open).
+    """
+    import pandas as pd
+    from tradingagents.agents.rotation.common import RAW_DIR, normalize_symbol_for_file
+
+    normalized = normalize_symbol_for_file(market, symbol)
+    path = RAW_DIR / f"{market}_{normalized}_1h.csv"
+    if not path.exists():
+        return {"ret_intraday": 0.0, "overextended": False}
+    try:
+        df = pd.read_csv(path)
+        if df.empty or "datetime" not in df.columns:
+            return {"ret_intraday": 0.0, "overextended": False}
+        today_str = str(date.today())
+        today_bars = df[df["datetime"].str.startswith(today_str)]
+        if today_bars.empty:
+            return {"ret_intraday": 0.0, "overextended": False}
+        open_close = float(today_bars.iloc[0]["close"])
+        last_close = float(today_bars.iloc[-1]["close"])
+        if open_close <= 0:
+            return {"ret_intraday": 0.0, "overextended": False}
+        ret_id = (last_close - open_close) / open_close
+        return {"ret_intraday": ret_id, "overextended": False}  # caller sets overextended
+    except Exception:
+        return {"ret_intraday": 0.0, "overextended": False}
+
+
+def _session_score(item: dict[str, Any], session: str) -> float:
+    """Return session-adjusted score for re-ranking candidates.
+
+    Three adjustments:
+    1. Overbought penalty   — ret_5d > threshold removes the stock from contention
+    2. Intraday momentum    — healthy same-day move boosts score
+    3. Overextension penalty — already ran too far today = disqualified
+    """
+    cfg = SESSION_META.get(session, SESSION_META["morning"])
+    base = float(item.get("rotation_score") or item.get("priority_score") or 0)
+
+    # 1. Overbought filter (daily)
+    ret_5d = float(item.get("ret_5d", 0.0))
+    if ret_5d > 0.35:
+        # Extremely overbought (>35% in 5 days) — hard exclude: score floor at -200
+        overbought_penalty = base + 200.0
+    elif ret_5d > 0.25:
+        # Very overbought (25-35%): heavy penalty scales with excess
+        excess = ret_5d - 0.25
+        overbought_penalty = 80.0 + excess * 400  # 25%→80, 35%→120
+    elif ret_5d > cfg["overbought_5d"]:
+        # Moderately overbought: moderate penalty
+        excess = ret_5d - cfg["overbought_5d"]
+        overbought_penalty = excess * 300  # ~0-30 pts
+    else:
+        overbought_penalty = 0.0
+
+    # 2 & 3. Intraday overlay
+    intraday = _load_intraday_overlay(item.get("market", "US"), item.get("symbol", ""))
+    ret_id = intraday["ret_intraday"]
+    intraday_weight = cfg["intraday_weight"]
+
+    overextended_threshold = cfg["overextended_intraday"]
+    if ret_id > overextended_threshold:
+        # Stock already ran too far today — strong penalty
+        intraday_bonus = -50.0
+    elif ret_id > 0.01:
+        # Healthy momentum: +5 to +20 pts depending on move magnitude and session weight
+        intraday_bonus = ret_id * 500 * intraday_weight
+    elif ret_id < -0.02:
+        # Down >2% today — penalise for short session, slight bonus for ambush
+        pool = item.get("pool", "")
+        intraday_bonus = 10.0 * intraday_weight if pool == "ambush" else -15.0 * intraday_weight
+    else:
+        # Flat or barely moved — neutral
+        intraday_bonus = ret_id * 200 * intraday_weight
+
+    return base - overbought_penalty + intraday_bonus
+
+
 def _load_sector_aliases() -> dict[str, str]:
     path = PROJECT_ROOT / "config" / "sector_aliases.yaml"
     if not path.exists():
@@ -42,7 +153,18 @@ def _ensure_rotation(date_str: str, market: str) -> dict[str, Any]:
 
 
 def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
-    """Pick n items ensuring at least 1 from each market that has candidates."""
+    """Pick n items ensuring at least 1 from each market that has candidates.
+
+    Uses _session_score when present (set by build_brief_payload), otherwise
+    falls back to rotation_score / priority_score.  This ensures the overbought
+    filter and intraday overlay are honoured in both the guaranteed and fill slots.
+    """
+    def _score(item: dict) -> float:
+        # Prefer _session_score (set per-session by build_brief_payload)
+        if "_session_score" in item:
+            return float(item["_session_score"])
+        return float(item.get("rotation_score") or item.get("priority_score") or 0)
+
     by_market: dict[str, list[dict]] = {}
     for item in candidates:
         by_market.setdefault(item["market"], []).append(item)
@@ -62,8 +184,8 @@ def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
         if len(result) >= n:
             break
 
-    # Fill remaining slots by rotation_score descending
-    remaining = sorted(candidates, key=lambda x: x.get("rotation_score") or x.get("priority_score", 0), reverse=True)
+    # Fill remaining slots by session-aware score descending
+    remaining = sorted(candidates, key=_score, reverse=True)
     for item in remaining:
         if len(result) >= n:
             break
@@ -74,18 +196,33 @@ def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
     return result[:n]
 
 
-def build_brief_payload(date_str: str) -> dict[str, Any]:
+def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, Any]:
     us = _ensure_rotation(date_str, "US")
     ah = _ensure_rotation(date_str, "AH")
     all_recs = us["recommendations"] + ah["recommendations"]
 
+    # Re-rank using session-aware scores (intraday overlay + overbought filter)
+    meta = SESSION_META.get(session, SESSION_META["morning"])
+    focus = meta.get("focus_markets")  # set of market codes, or None = all markets
+
+    for rec in all_recs:
+        rec["_session_score"] = _session_score(rec, session)
+
+    def _eligible(r: dict) -> bool:
+        if focus is not None and r.get("market") not in focus:
+            return False
+        # Hard exclude: negative session_score means overbought / overextended
+        if r.get("_session_score", 0) < 0:
+            return False
+        return True
+
     shorts = sorted(
-        [r for r in all_recs if r["horizon"] == "short"],
-        key=lambda x: x.get("rotation_score") or x.get("priority_score", 0), reverse=True,
+        [r for r in all_recs if r["horizon"] == "short" and _eligible(r)],
+        key=lambda x: x["_session_score"], reverse=True,
     )
     swings = sorted(
-        [r for r in all_recs if r["horizon"] == "swing"],
-        key=lambda x: x.get("rotation_score") or x.get("priority_score", 0), reverse=True,
+        [r for r in all_recs if r["horizon"] == "swing" and _eligible(r)],
+        key=lambda x: x["_session_score"], reverse=True,
     )
 
     short_block = _pick_with_diversity(shorts, 5)  # up to 5 short, diverse markets
@@ -99,6 +236,7 @@ def build_brief_payload(date_str: str) -> dict[str, Any]:
     signal = (ah["cross_market_signals"] or us["cross_market_signals"] or [{}])[0]
     return {
         "date": date_str,
+        "session": session,
         "leaders": leaders,
         "cross_market_signal": signal,
         "short_block": short_block,
@@ -132,15 +270,17 @@ def _data_staleness_note() -> str:
     return ""
 
 
-def build_brief_text(date_str: str) -> str:
-    payload = build_brief_payload(date_str)
+def build_brief_text(date_str: str, session: str = "morning") -> str:
+    payload = build_brief_payload(date_str, session)
+    meta = SESSION_META.get(session, SESSION_META["morning"])
     cn_leaders = " > ".join(_sector_cn(s) for s in payload["leaders"]) if payload["leaders"] else "无"
     signal = payload["cross_market_signal"]
     signal_text = signal.get("narrative", "无跨市场信号")
     market_label = {"CN": "A股", "HK": "港股", "US": "美股"}
     staleness = _data_staleness_note()
     lines = [
-        f"🔄 AI轮动晨报 · {date_str}",
+        f"{meta['label']} · {date_str}",
+        f"({meta['caption']})",
         f"今日领涨赛道：{cn_leaders}",
         f"跨市场信号：{signal_text}",
     ]
@@ -212,9 +352,12 @@ def main() -> None:
     load_env_file()
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default=str(date.today()))
+    parser.add_argument("--session", default="morning",
+                        choices=["morning", "midday", "evening"],
+                        help="Which of the 3 daily sessions this push is for")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    text = build_brief_text(args.date)
+    text = build_brief_text(args.date, args.session)
     if args.dry_run:
         print(text)
         return
