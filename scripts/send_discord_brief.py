@@ -245,26 +245,21 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
 
 
 def _data_staleness_note() -> str:
-    """Return a warning line if US market data is more than 2 trading days stale."""
-    from datetime import date, timedelta
+    """Return a warning line if candidates.json is missing or was not generated today.
+
+    New pipeline: fetch_all_daily → screen_candidates → candidates.json (with "date" field).
+    Stale = generated on a previous date.  Missing = pipeline hasn't run yet.
+    """
+    from datetime import date
     try:
-        import pandas as pd
-        from tradingagents.agents.rotation.common import RAW_DIR
-        cutoff = date.today() - timedelta(days=2)
-        stale_count = 0
-        checked = 0
-        for csv_file in sorted(RAW_DIR.glob("US_*_daily.csv"))[:8]:
-            try:
-                last_date_str = pd.read_csv(csv_file, usecols=["date"]).dropna().tail(1)["date"].iloc[0]
-                if pd.Timestamp(last_date_str).date() < cutoff:
-                    stale_count += 1
-                checked += 1
-            except Exception:
-                pass
-        if checked == 0:
-            return "⚠️ 无US市场数据 — 价格可能为模拟值，请运行 fetch_market_data.py"
-        if stale_count >= checked // 2:
-            return f"⚠️ 数据陈旧 — US数据最新至{last_date_str}，建议运行 fetch_market_data.py 更新"
+        candidates_path = PROJECT_ROOT / "data" / "candidates.json"
+        if not candidates_path.exists():
+            return "⚠️ 候选股票数据不存在 — 请先运行 fetch_all_daily.py + screen_candidates.py"
+        data = json.loads(candidates_path.read_text())
+        gen_date = data.get("date", "")
+        if gen_date == str(date.today()):
+            return ""  # fresh
+        return f"⚠️ 数据陈旧 — candidates.json 生成于 {gen_date}，建议运行 fetch_all_daily.py 更新"
     except Exception:
         pass
     return ""
