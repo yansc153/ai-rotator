@@ -77,20 +77,40 @@ def build_recommendations(
             })
     shorts = sorted(shorts, key=lambda item: item["rotation_score"], reverse=True)[:5]
 
-    # Swing: from ambush pool (stocks down ≥30% from 1yr high — left-side entry)
+    # Swing: primary source = ambush pool (stocks down ≥20% from 20d high — left-side entry)
+    # Fallback: when ambush is empty (bull market / strong momentum), use the lowest-scored
+    # day_active stocks — they have confirmed trend but haven't run far, suit multi-tranche swing entry.
+    swing_source = [row for row in ambush_pool if _market_matches(row["market"], market)]
+    if not swing_source:
+        day_active_filtered = [
+            row for row in candidate_set
+            if _market_matches(row["market"], market) and row.get("pool") == "day_active"
+        ]
+        # Lowest rotation_score = least overextended → better swing entry
+        swing_source = sorted(day_active_filtered, key=lambda x: x.get("rotation_score", 0))[:10]
+
     swings: list[dict] = []
-    for row in ambush_pool:
-        if not _market_matches(row["market"], market):
-            continue
+    for row in swing_source:
         swing_plan = build_swing_plan(row["current_price"], row["atr14"], market=row["market"])
         if not swing_plan.get("rejected"):
+            is_ambush = row.get("pool") == "ambush"
+            thesis = row.get("llm_thesis") or (
+                f"{row['sector']} 左侧布局" if is_ambush
+                else f"{row['sector']} 强势整理 · 分批布局"
+            )
+            # conviction: ambush uses drawdown_1y depth; fallback uses 20d momentum as proxy
+            if is_ambush:
+                conviction = min(0.90, 0.50 + abs(row.get("drawdown_1y", 0)) * 0.5)
+            else:
+                ret_20d = abs(float(row.get("ret_20d", 0.0)))
+                conviction = min(0.80, 0.45 + ret_20d * 0.8)
             swings.append({
                 **row,
                 "side": "LONG",
                 "horizon": "swing",
                 "plan": swing_plan,
-                "thesis": row.get("llm_thesis") or f"{row['sector']} 左侧布局",
-                "conviction": min(0.90, 0.50 + abs(row.get("drawdown_1y", 0)) * 0.5),
+                "thesis": thesis,
+                "conviction": conviction,
             })
     swings = sorted(swings, key=lambda item: item["priority_score"], reverse=True)[:3]
     run_id = str(uuid4())
