@@ -455,15 +455,40 @@ def screen_earnings_plays() -> list[dict]:
 
     plays: list[dict] = []
 
+    # yfinance rate-limit recovery: fetch_all_daily.py just hammered ~3357 tickers.
+    # Wait 45s before starting per-ticker calls so the rate limiter resets.
+    print("[earnings] Waiting 45s for yfinance rate-limit recovery ...", flush=True)
+    time.sleep(45)
+
     # Step 3: detailed analysis for each matched stock
     for entry in matches:
         yf_sym  = entry["yf_symbol"]
         our_sym = entry["our_symbol"]
+
+        # Throttle BEFORE each call (not after) so even failed calls are spaced out.
+        time.sleep(1.2)
         print(f"  Analysing {our_sym} ({entry['company_name'][:25]}) — {entry['earnings_date']} {entry['release_time']}", flush=True)
 
+        # Retry up to 3x with exponential backoff on rate-limit errors.
+        info: dict = {}
+        t = None
+        for attempt in range(3):
+            try:
+                t    = yf.Ticker(yf_sym)
+                info = t.info or {}
+                break
+            except Exception as exc:
+                if "Too Many Requests" in str(exc) or "Rate limit" in str(exc).lower():
+                    wait = 15 * (2 ** attempt)
+                    print(f"    [rate limit] sleeping {wait}s (attempt {attempt+1}/3)", flush=True)
+                    time.sleep(wait)
+                else:
+                    print(f"    → info fetch failed: {exc}", flush=True)
+                    break
+        if t is None:
+            continue
+
         try:
-            t = yf.Ticker(yf_sym)
-            info      = t.info or {}
             candidate = candidates.get(our_sym) or candidates.get(yf_sym)
 
             cur_price = float(
@@ -564,8 +589,6 @@ def screen_earnings_plays() -> list[dict]:
         except Exception as exc:
             print(f"    → failed: {exc}", flush=True)
             continue
-
-        time.sleep(0.3)
 
     plays.sort(key=lambda x: x["total_score"], reverse=True)
     print(f"\n[earnings] Done: {len(plays)} plays above threshold (min {MIN_SCORE})", flush=True)

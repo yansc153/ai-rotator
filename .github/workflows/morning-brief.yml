@@ -8,7 +8,7 @@ on:
 jobs:
   morning-brief:
     runs-on: ubuntu-latest
-    timeout-minutes: 45   # extended: US/HK individual-ticker retry adds ~10min
+    timeout-minutes: 60   # extended: earnings 45s recovery + 43 tickers × 1.2s + retries
 
     steps:
       - uses: actions/checkout@v4
