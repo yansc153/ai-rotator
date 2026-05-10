@@ -335,18 +335,28 @@ def _fmt_earnings_history(reactions: list[dict]) -> str:
 
 
 def _fmt_earnings_block(play: dict, idx: int, market_label: dict) -> list[str]:
-    """Format one earnings play as Discord lines."""
-    mkt   = market_label.get(play["market"], play["market"])
-    sec   = _sector_cn(play.get("sector", ""))
-    side  = play.get("side", "LONG")
+    """Format one earnings play as Discord lines — v4 financial model.
+
+    Displays:
+      Line 1: ticker / name / market / side / earnings date / score
+      Line 2: historical reactions + conviction
+      Line 3: options-implied move vs historical edge  (options-payoff model)
+      Line 4: EPS revision direction + beat rate       (estimate-analysis model)
+      Line 5: entry plan (timing / buy zone / SL / T1 T2 / RR)
+      Line 6: technical setup note
+      Line 7: analyst rating  (optional)
+    """
+    mkt        = market_label.get(play["market"], play["market"])
+    sec        = _sector_cn(play.get("sector", ""))
+    side       = play.get("side", "LONG")
     side_emoji = "🟢多" if side == "LONG" else "🔴空"
-    cur   = play.get("current_price", 0)
-    win   = play.get("win_rate")
-    conv  = play.get("conviction", "")
-    timing = play.get("timing", "")
-    score  = play.get("total_score", 0)
-    days   = play.get("days_to_earnings", 0)
-    hist   = _fmt_earnings_history(play.get("historical_reactions", []))
+    cur        = play.get("current_price", 0)
+    win        = play.get("win_rate")
+    conv       = play.get("conviction", "")
+    timing     = play.get("timing", "")
+    score      = play.get("total_score", 0)
+    days       = play.get("days_to_earnings", 0)
+    hist       = _fmt_earnings_history(play.get("historical_reactions", []))
 
     entry_low  = play.get("entry_low",  cur)
     entry_high = play.get("entry_high", cur)
@@ -354,18 +364,56 @@ def _fmt_earnings_block(play: dict, idx: int, market_label: dict) -> list[str]:
     t1         = play.get("target_1",   cur)
     t2         = play.get("target_2",   cur)
     rr         = play.get("rr",         0)
-    tgt_up     = play.get("target_upside", 0)
+
+    # Line 3: implied move edge (options-payoff model)
+    implied_label = play.get("implied_label", "")
+    if not implied_label:
+        impl = play.get("implied_move")
+        avg  = play.get("avg_move")
+        if impl and avg:
+            edge = avg - impl
+            implied_label = f"期权隐含±{impl:.1%}  实际均±{avg:.1%}  超额{'+' if edge>=0 else ''}{edge:.1%}"
+        elif impl:
+            implied_label = f"期权隐含±{impl:.1%}"
+        elif avg:
+            implied_label = f"实际均±{avg:.1%}（无期权数据）"
+
+    # Line 4: EPS revision (estimate-analysis model)
+    rev_dir    = play.get("eps_revision_direction")
+    rev_pct    = play.get("eps_revision_pct")
+    beat_rate  = play.get("beat_rate")
+    avg_surp   = play.get("avg_surprise_pct")
+    rev_parts  = []
+    if rev_dir and rev_pct is not None:
+        arrow = "↑" if rev_dir == "上调" else ("↓" if rev_dir == "下调" else "→")
+        rev_parts.append(f"EPS修正:{arrow}{rev_dir}{rev_pct:+.1%}(30日)")
+    if beat_rate is not None:
+        beat_str = f"过去{round(beat_rate*4)+1}季胜率{beat_rate:.0%}"
+        if avg_surp is not None:
+            beat_str += f" 均超预期{avg_surp:+.1%}"
+        rev_parts.append(beat_str)
+    eps_line = "  ".join(rev_parts) if rev_parts else "EPS修正数据不可用"
 
     lines = [
+        # Line 1: header
         f"#{idx} {play['symbol']} {play['company_name']} [{mkt}·{sec}]"
         f"  {side_emoji}  财报:{play['earnings_date']}({days}天后)  评分:{score:.0f}",
-        f"   过去5次财报次日: {hist}",
-        f"   {'多' if side=='LONG' else '空'}胜率: {win:.0%}" + (f"  | {conv}" if conv else "") if win is not None else f"   {conv}",
-        f"   {timing}  |  买入 {entry_low:.2f}–{entry_high:.2f}  |  SL {sl:.2f}  |  T1 {t1:.2f} T2 {t2:.2f}  |  RR 1:{rr:.1f}",
-        f"   技术面: {play.get('notes', {}).get('technical', '')}",
+        # Line 2: historical reactions
+        f"   历史{len(play.get('historical_reactions', []))}次财报次日: {hist}"
+        + (f"  {'多' if side=='LONG' else '空'}胜率:{win:.0%} {conv}" if win is not None else f"  {conv}"),
+        # Line 3: options-implied edge  ← options-payoff model
+        f"   {implied_label}",
+        # Line 4: EPS revision          ← estimate-analysis model
+        f"   {eps_line}",
+        # Line 5: entry plan
+        f"   {timing}  |  买入 {entry_low:.2f}–{entry_high:.2f}  |  SL {sl:.2f}"
+        f"  |  T1 {t1:.2f} T2 {t2:.2f}  |  RR 1:{rr:.1f}",
+        # Line 6: technical setup
+        f"   技术: {play.get('notes', {}).get('technical', '')}",
     ]
-    if play.get("notes", {}).get("analyst"):
-        lines.append(f"   分析师: {play['notes']['analyst']}")
+    analyst_note = play.get("notes", {}).get("analyst", "")
+    if analyst_note:
+        lines.append(f"   分析师: {analyst_note}")
     return lines
 
 
