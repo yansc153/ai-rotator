@@ -31,7 +31,8 @@ DB_PATH = ROOT / "data" / "daily_cache.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 KEEP_DAYS = 30        # rolling window kept in SQLite
-YF_CHUNK  = 400       # tickers per yf.download call
+YF_CHUNK  = 400       # tickers per yf.download call (CN batches)
+YF_CHUNK_SMALL = 50  # smaller batch for US/HK — large batches silently drop many tickers
 YF_PERIOD = "30d"     # history window for yfinance
 warnings.filterwarnings("ignore")
 
@@ -247,70 +248,111 @@ def _yf_batch_cn(
 
 # ── HK + US: yfinance batch download ─────────────────────────────────────────
 
-def _yf_batch(tickers: list[str], market: str, conn: sqlite3.Connection) -> int:
+def _yf_parse_raw(raw: pd.DataFrame, chunk: list[str], market: str) -> list[dict]:
+    """Parse a yfinance download result into row dicts. Handles single and multi-ticker."""
+    if raw.empty:
+        return []
+    if isinstance(raw.columns, pd.MultiIndex):
+        tickers_in = raw.columns.get_level_values(1).unique()
+    else:
+        raw.columns = pd.MultiIndex.from_tuples(
+            [(c, chunk[0]) for c in raw.columns], names=["Price", "Ticker"]
+        )
+        tickers_in = [chunk[0]]
+
+    rows = []
+    for ticker in tickers_in:
+        try:
+            sub = raw.xs(ticker, axis=1, level="Ticker").dropna(how="all")
+        except KeyError:
+            continue
+        sub = sub.rename(columns=str.lower)
+        for idx_date, drow in sub.iterrows():
+            close = drow.get("close")
+            if pd.isna(close) or close <= 0:
+                continue
+            prev_idx = sub.index.get_loc(idx_date) - 1
+            prev_close = sub.iloc[prev_idx]["close"] if prev_idx >= 0 else close
+            pct = (close - prev_close) / prev_close * 100 if prev_close else 0
+            rows.append({
+                "date": str(idx_date)[:10],
+                "market": market,
+                "symbol": ticker,
+                "open":   float(drow.get("open",   close)),
+                "high":   float(drow.get("high",   close)),
+                "low":    float(drow.get("low",    close)),
+                "close":  float(close),
+                "volume": float(drow.get("volume", 0) or 0),
+                "pct_change": round(pct, 4),
+            })
+    return rows
+
+
+def _yf_batch(
+    tickers: list[str],
+    market: str,
+    conn: sqlite3.Connection,
+    chunk_size: int = YF_CHUNK,
+) -> int:
+    """Batch-download via yfinance.
+
+    Uses chunk_size tickers per call. After the batch pass, any ticker that ended
+    up with <3 rows in the DB is retried individually — this catches tickers that
+    yfinance silently drops from large batches (common for small-cap / low-volume names).
+    """
     import yfinance as yf
 
     total = 0
-    for i in range(0, len(tickers), YF_CHUNK):
-        chunk = tickers[i: i + YF_CHUNK]
+    n_chunks = max(1, (len(tickers) - 1) // chunk_size + 1)
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i: i + chunk_size]
         try:
             raw = yf.download(chunk, period=YF_PERIOD, auto_adjust=True,
                               progress=False, threads=True)
         except Exception as exc:
-            print(f"  {market} chunk {i//YF_CHUNK+1}: download error — {exc}", flush=True)
+            print(f"  {market} chunk {i//chunk_size+1}/{n_chunks}: download error — {exc}", flush=True)
             continue
-
-        if raw.empty:
-            continue
-
-        # yfinance returns MultiIndex columns (Price, Ticker) when >1 ticker
-        if isinstance(raw.columns, pd.MultiIndex):
-            tickers_in = raw.columns.get_level_values(1).unique()
-        else:
-            # Single ticker — wrap for uniform handling
-            raw.columns = pd.MultiIndex.from_tuples(
-                [(c, chunk[0]) for c in raw.columns], names=["Price", "Ticker"]
-            )
-            tickers_in = [chunk[0]]
-
-        rows = []
-        for ticker in tickers_in:
-            try:
-                sub = raw.xs(ticker, axis=1, level="Ticker").dropna(how="all")
-            except KeyError:
-                continue
-            sub = sub.rename(columns=str.lower)
-            for idx_date, drow in sub.iterrows():
-                close = drow.get("close")
-                if pd.isna(close) or close <= 0:
-                    continue
-                prev_idx = sub.index.get_loc(idx_date) - 1
-                prev_close = sub.iloc[prev_idx]["close"] if prev_idx >= 0 else close
-                pct = (close - prev_close) / prev_close * 100 if prev_close else 0
-                rows.append({
-                    "date": str(idx_date)[:10],
-                    "market": market,
-                    "symbol": ticker,
-                    "open":   float(drow.get("open",   close)),
-                    "high":   float(drow.get("high",   close)),
-                    "low":    float(drow.get("low",    close)),
-                    "close":  float(close),
-                    "volume": float(drow.get("volume", 0) or 0),
-                    "pct_change": round(pct, 4),
-                })
+        rows = _yf_parse_raw(raw, chunk, market)
         saved = _upsert(conn, rows)
         total += saved
-        print(f"  {market} chunk {i//YF_CHUNK+1}/{(len(tickers)-1)//YF_CHUNK+1}: "
-              f"{saved} rows stored", flush=True)
+        print(f"  {market} chunk {i//chunk_size+1}/{n_chunks}: "
+              f"{len(chunk)} tickers → {saved} rows stored", flush=True)
+
+    # Retry individual tickers that have <MIN_DAYS rows (silently dropped by batch)
+    retry_cutoff = (date.today() - timedelta(days=KEEP_DAYS)).isoformat()
+    existing_counts: dict[str, int] = {}
+    conn_cursor = conn.execute(
+        "SELECT symbol, COUNT(*) FROM daily_prices WHERE market=? AND date>=? GROUP BY symbol",
+        (market, retry_cutoff),
+    )
+    for sym, cnt in conn_cursor.fetchall():
+        existing_counts[sym] = cnt
+
+    to_retry = [t for t in tickers if existing_counts.get(t, 0) < 3]
+    if to_retry:
+        print(f"  {market} retry: {len(to_retry)} tickers with <3 rows → individual download", flush=True)
+        retry_saved = 0
+        for ticker in to_retry:
+            try:
+                raw = yf.download([ticker], period=YF_PERIOD, auto_adjust=True,
+                                  progress=False, threads=False)
+                rows = _yf_parse_raw(raw, [ticker], market)
+                if rows:
+                    retry_saved += _upsert(conn, rows)
+            except Exception:
+                pass
+        print(f"  {market} retry: {retry_saved} additional rows stored", flush=True)
+        total += retry_saved
+
     return total
 
 
 def fetch_hk(universe: pd.DataFrame, conn: sqlite3.Connection) -> int:
     hk = universe[universe.market == "HK"]
     yf_tickers = hk["yf_symbol"].dropna().unique().tolist()
-    print(f"  HK: {len(yf_tickers)} tickers via yf.download ...", flush=True)
+    print(f"  HK: {len(yf_tickers)} tickers via yf.download (chunk={YF_CHUNK_SMALL}) ...", flush=True)
     t0 = time.time()
-    saved = _yf_batch(yf_tickers, "HK", conn)
+    saved = _yf_batch(yf_tickers, "HK", conn, chunk_size=YF_CHUNK_SMALL)
     print(f"  HK: done in {time.time()-t0:.1f}s  total rows={saved}", flush=True)
     return saved
 
@@ -318,9 +360,9 @@ def fetch_hk(universe: pd.DataFrame, conn: sqlite3.Connection) -> int:
 def fetch_us(universe: pd.DataFrame, conn: sqlite3.Connection) -> int:
     us = universe[universe.market == "US"]
     tickers = us["yf_symbol"].dropna().unique().tolist()
-    print(f"  US: {len(tickers)} tickers via yf.download ...", flush=True)
+    print(f"  US: {len(tickers)} tickers via yf.download (chunk={YF_CHUNK_SMALL}) ...", flush=True)
     t0 = time.time()
-    saved = _yf_batch(tickers, "US", conn)
+    saved = _yf_batch(tickers, "US", conn, chunk_size=YF_CHUNK_SMALL)
     print(f"  US: done in {time.time()-t0:.1f}s  total rows={saved}", flush=True)
     return saved
 

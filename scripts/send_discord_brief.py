@@ -152,15 +152,32 @@ def _ensure_rotation(date_str: str, market: str) -> dict[str, Any]:
     return payload
 
 
+def _cap_tier(market_cap: float) -> str:
+    """Classify market cap into tiers to enforce diversity in pick selection."""
+    if market_cap <= 0:
+        return "unknown"
+    if market_cap >= 500:     # ≥$500B / ≥500亿HKD equivalent
+        return "mega"
+    if market_cap >= 50:      # $50-500B
+        return "large"
+    if market_cap >= 5:       # $5-50B
+        return "mid"
+    return "small"            # <$5B
+
+
 def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
-    """Pick n items ensuring at least 1 from each market that has candidates.
+    """Pick n items ensuring market diversity AND cap-tier diversity.
+
+    Rules:
+    1. Reserve 1 slot per market present (CN / HK / US)
+    2. Cap mega-cap (≥$500B) stocks at max 2 slots total — prevents NVDA/AMD/TSM
+       from filling all 5 short slots when US data improves
+    3. Fill remaining slots by session-aware score descending
 
     Uses _session_score when present (set by build_brief_payload), otherwise
-    falls back to rotation_score / priority_score.  This ensures the overbought
-    filter and intraday overlay are honoured in both the guaranteed and fill slots.
+    falls back to rotation_score / priority_score.
     """
     def _score(item: dict) -> float:
-        # Prefer _session_score (set per-session by build_brief_payload)
         if "_session_score" in item:
             return float(item["_session_score"])
         return float(item.get("rotation_score") or item.get("priority_score") or 0)
@@ -171,21 +188,44 @@ def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
 
     result: list[dict] = []
     seen_symbols: set[str] = set()
+    mega_cap_count = 0
+    MEGA_CAP_MAX = 2  # at most 2 mega-cap stocks per block
 
-    # Reserve 1 slot per market (up to n), fill remainder by score
+    # Phase 1: guarantee 1 slot per market (pick highest-scored non-mega or mega if no choice)
     markets_present = list(by_market.keys())
-    guaranteed = min(len(markets_present), n)
-    for market in markets_present[:guaranteed]:
-        for item in by_market[market]:
-            if item["symbol"] not in seen_symbols:
-                result.append(item)
-                seen_symbols.add(item["symbol"])
-                break
+    for market in markets_present:
         if len(result) >= n:
             break
+        # Try non-mega first, then fall through to mega if no non-mega available
+        pool = sorted(by_market[market], key=_score, reverse=True)
+        for item in pool:
+            if item["symbol"] in seen_symbols:
+                continue
+            tier = _cap_tier(float(item.get("market_cap", 0)))
+            if tier == "mega" and mega_cap_count >= MEGA_CAP_MAX:
+                continue
+            result.append(item)
+            seen_symbols.add(item["symbol"])
+            if tier == "mega":
+                mega_cap_count += 1
+            break
 
-    # Fill remaining slots by session-aware score descending
+    # Phase 2: fill remaining slots by score, respecting mega-cap cap
     remaining = sorted(candidates, key=_score, reverse=True)
+    for item in remaining:
+        if len(result) >= n:
+            break
+        if item["symbol"] in seen_symbols:
+            continue
+        tier = _cap_tier(float(item.get("market_cap", 0)))
+        if tier == "mega" and mega_cap_count >= MEGA_CAP_MAX:
+            continue
+        result.append(item)
+        seen_symbols.add(item["symbol"])
+        if tier == "mega":
+            mega_cap_count += 1
+
+    # Phase 3: if still not enough, relax mega-cap constraint to fill remaining slots
     for item in remaining:
         if len(result) >= n:
             break
@@ -265,6 +305,38 @@ def _data_staleness_note() -> str:
     return ""
 
 
+def _load_earnings_plays(date_str: str, top_n: int = 3) -> list[dict]:
+    """Load earnings plays from data/earnings_plays.json, return top_n for today."""
+    path = PROJECT_ROOT / "data" / "earnings_plays.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        if data.get("date") != date_str:
+            return []  # stale — only use same-day data
+        return data.get("earnings_plays", [])[:top_n]
+    except Exception:
+        return []
+
+
+def _earnings_entry_price(play: dict) -> str:
+    """Suggest entry price range for an earnings play."""
+    cur = float(play.get("current_price", 0))
+    atr_pct = float(play.get("atr_pct", 0.03))
+    timing = play.get("timing", "")
+    if cur <= 0:
+        return "参考市价"
+    if timing == "盘前买入":
+        # Buy into strength before earnings — tight range near current
+        return f"{cur * 0.997:.2f}–{cur * 1.005:.2f}"
+    elif timing == "盘后买入":
+        # Wait for post-earnings gap, buy the confirmed gap up
+        return f"等财报后确认方向，参考{cur * 1.02:.2f}–{cur * 1.06:.2f}"
+    else:
+        # Buy before close on earnings day
+        return f"{cur * 0.995:.2f}–{cur * 1.003:.2f}"
+
+
 def build_brief_text(date_str: str, session: str = "morning") -> str:
     payload = build_brief_payload(date_str, session)
     meta = SESSION_META.get(session, SESSION_META["morning"])
@@ -308,6 +380,36 @@ def build_brief_text(date_str: str, session: str = "morning") -> str:
             f"SL {p['stop_loss']:.2f} | T1 {p['target_1']:.2f} T2 {p['target_2']:.2f}"
         )
         lines.append(f"   逻辑：{item.get('thesis') or sec + '中线布局机会'}")
+
+    # ── 赌财报板块 ─────────────────────────────────────────────────────────────
+    # Only show on morning session (pre-market is the best time to plan earnings trades)
+    # and only when earnings_plays.json is fresh (generated today)
+    earnings_plays = _load_earnings_plays(date_str, top_n=3)
+    if earnings_plays:
+        offset = len(payload["short_block"]) + len(payload["swing_block"]) + 1
+        lines.append("")
+        lines.append(f"▌ 🎯 赌财报 — 下周发布 (共{len(earnings_plays)}只)")
+        for idx, play in enumerate(earnings_plays, start=offset):
+            mkt = market_label.get(play["market"], play["market"])
+            sec = _sector_cn(play.get("sector", ""))
+            score = play["total_score"]
+            days_to = play["days_to_earnings"]
+            timing = play.get("timing", "观望")
+            entry = _earnings_entry_price(play)
+            upside = play.get("target_upside", 0)
+            surprise_note = play.get("notes", {}).get("surprise", "")
+            tech_note = play.get("notes", {}).get("technical", "")
+
+            lines.append(
+                f"#{idx} {play['symbol']} {play['company_name']} [{mkt}·{sec}]"
+                f"  财报:{play['earnings_date']}({days_to}天后)  评分:{score}/100"
+            )
+            lines.append(
+                f"   策略:{timing}  买入:{entry}"
+                + (f"  目标上行:{upside:+.1%}" if upside != 0 else "")
+            )
+            lines.append(f"   财报面:{surprise_note}")
+            lines.append(f"   技术面:{tech_note}")
     return "\n".join(lines)
 
 

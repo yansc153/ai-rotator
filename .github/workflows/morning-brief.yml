@@ -8,7 +8,7 @@ on:
 jobs:
   morning-brief:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45   # extended: US/HK individual-ticker retry adds ~10min
 
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +32,12 @@ jobs:
 
       - name: Score and screen candidates
         run: cd scripts && python screen_candidates.py
+        continue-on-error: true
+        env:
+          PYTHONUNBUFFERED: "1"
+
+      - name: Screen earnings plays (next 7 days)
+        run: cd scripts && python fetch_earnings_plays.py
         continue-on-error: true
         env:
           PYTHONUNBUFFERED: "1"
