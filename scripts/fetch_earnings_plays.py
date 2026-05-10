@@ -1,20 +1,24 @@
-"""Earnings Play Screener — 赌财报模块 v2
+"""Earnings Play Screener — 赌财报模块 v3
 
-For each AI-sector stock with earnings in the next 7 days, computes:
-
-  1. Post-earnings historical reactions — last 5 quarters, exact next-day %
-  2. Direction bias — LONG / SHORT based on win rate + current technicals
-  3. Multi-factor conviction score (0–100)
-  4. Exact entry strategy per direction
+Correct architecture:
+  Step 1  Pull full earnings calendar from NASDAQ API for next 7 days
+          → ~250 stocks/day, 5 calls total for the week
+  Step 2  Cross-reference with our universe_full.csv
+          → typically 30–50 matches from our AI-sector universe
+  Step 3  For each match, fetch detailed data via yfinance:
+            - Last 5 post-earnings next-day price reactions (actual %)
+            - Direction bias (LONG / SHORT) based on historical win rate
+            - Pre-earnings technical setup from candidates.json
+            - Analyst consensus + price target
+  Step 4  Score (0–100) and rank
+  Step 5  Output top plays to data/earnings_plays.json
 
 Scoring (0–100):
-  historical_reaction (0–35): consistency + avg magnitude of past post-earnings moves
-  technical_setup     (0–25): pre-earnings drift quality
+  historical_reaction (0–35): consistency + magnitude of past post-earnings moves
+  technical_setup     (0–25): pre-earnings drift quality (momentum, not overbought)
   analyst_conviction  (0–20): consensus rating + price-target upside
-  sector_momentum     (0–10): leading AI sector alignment
-  eps_surprise_trend  (0–10): EPS beat consistency (supplementary)
-
-Output: data/earnings_plays.json
+  eps_surprise_trend  (0–10): EPS beat consistency last 4 quarters
+  sector_momentum     (0–10): stock is in a leading AI sector today
 """
 from __future__ import annotations
 
@@ -34,447 +38,483 @@ warnings.filterwarnings("ignore")
 
 OUTPUT_JSON     = PROJECT_ROOT / "data" / "earnings_plays.json"
 CANDIDATES_JSON = PROJECT_ROOT / "data" / "candidates.json"
+UNIVERSE_CSV    = PROJECT_ROOT / "data" / "universe_full.csv"
 
-EARNINGS_WINDOW_DAYS = 7   # scan earnings within next 7 calendar days
-MIN_SCORE            = 40  # minimum total score to include
-EARNINGS_MARKETS     = {"US", "HK"}
-HISTORY_QUARTERS     = 5   # how many past earnings reactions to show
-
-
-# ── Data loaders ──────────────────────────────────────────────────────────────
-
-def _load_candidates() -> dict[str, dict]:
-    if not CANDIDATES_JSON.exists():
-        return {}
-    data = json.loads(CANDIDATES_JSON.read_text())
-    return {c["symbol"]: c for c in data.get("candidates", [])}
+EARNINGS_WINDOW_DAYS = 7    # calendar days to look ahead
+MIN_SCORE            = 35   # minimum total score to include
+HISTORY_QUARTERS     = 5    # post-earnings reactions to show
 
 
-def _load_leading_sectors() -> set[str]:
-    today = str(date.today())
-    leading: set[str] = set()
-    for mkt in ("us", "ah"):
-        path = PROJECT_ROOT / "reports" / "daily" / f"{today}-{mkt}-rotation.json"
-        if path.exists():
-            try:
-                for s in json.loads(path.read_text()).get("leading_sectors_today", []):
-                    leading.add(s.get("sector", ""))
-            except Exception:
-                pass
-    return leading
+# ── Step 1: Pull NASDAQ earnings calendar ─────────────────────────────────────
+
+def _fetch_nasdaq_day(date_str: str) -> list[dict]:
+    """Fetch all stocks reporting on a single date from NASDAQ calendar API."""
+    import requests, certifi
+    url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        r = requests.get(url, headers=headers, verify=certifi.where(), timeout=15)
+        rows = (r.json().get("data") or {}).get("rows") or []
+        result = []
+        for row in rows:
+            sym = str(row.get("symbol", "")).strip()
+            if not sym:
+                continue
+            result.append({
+                "symbol":            sym,
+                "nasdaq_name":       str(row.get("name", "")),
+                "earnings_date":     date_str,
+                "release_time":      row.get("time", "time-not-supplied"),  # pre-market / after-hours / not-supplied
+                "eps_forecast":      row.get("epsForecast", ""),
+                "eps_last_year":     row.get("lastYearEPS", ""),
+                "market_cap_str":    row.get("marketCap", ""),
+                "fiscal_quarter":    row.get("fiscalQuarterEnding", ""),
+            })
+        return result
+    except Exception as exc:
+        print(f"  [calendar] NASDAQ fetch failed for {date_str}: {exc}", flush=True)
+        return []
 
 
-# ── Historical post-earnings reaction ─────────────────────────────────────────
+def fetch_earnings_calendar(start: date, days: int = EARNINGS_WINDOW_DAYS) -> list[dict]:
+    """Fetch earnings calendar for the next `days` calendar days."""
+    all_rows: list[dict] = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        if d.weekday() >= 5:   # skip weekends
+            continue
+        rows = _fetch_nasdaq_day(str(d))
+        print(f"  [calendar] {d}: {len(rows)} stocks reporting", flush=True)
+        all_rows.extend(rows)
+        time.sleep(0.3)    # gentle throttle
+    return all_rows
 
-def _get_post_earnings_reactions(ticker_obj, n: int = HISTORY_QUARTERS) -> list[dict]:
-    """Return list of last N post-earnings next-day price reactions.
 
-    For each past earnings date we calculate:
-      pct = (close_day_after_earnings - close_day_before_earnings) / close_day_before_earnings
+# ── Step 2: Cross-reference with universe ─────────────────────────────────────
 
-    Returns list of dicts sorted newest-first:
-      {"date": "2024-11-20", "pct": 0.092, "direction": "▲", "eps_surprise_pct": 0.12}
+def cross_reference_universe(calendar: list[dict]) -> list[dict]:
+    """Filter calendar to stocks in our AI-sector universe. Returns enriched dicts."""
+    import pandas as pd
+    universe = pd.read_csv(UNIVERSE_CSV)
+
+    # Build fast lookup: yf_symbol → row, symbol → row
+    sym_to_row: dict[str, dict] = {}
+    for _, row in universe.iterrows():
+        d = row.to_dict()
+        sym_to_row[str(row["yf_symbol"])] = d
+        sym_to_row[str(row["symbol"])]    = d
+
+    matches: list[dict] = []
+    seen: set[str] = set()
+    for entry in calendar:
+        sym = entry["symbol"]
+        if sym in seen:
+            continue
+        u = sym_to_row.get(sym)
+        if u is None:
+            continue
+        seen.add(sym)
+        sector_raw = str(u.get("sector_tags", "") or "")
+        sector     = sector_raw.split(",")[0].strip().split(";")[0].strip()
+        matches.append({
+            **entry,
+            "our_symbol":   str(u.get("symbol", sym)),
+            "yf_symbol":    str(u.get("yf_symbol", sym)),
+            "company_name": str(u.get("name", entry["nasdaq_name"])),
+            "market":       str(u.get("market", "US")),
+            "sector":       sector,
+            "sector_tags":  sector_raw,
+            "market_cap":   float(u.get("market_cap") or 0),
+        })
+    return matches
+
+
+# ── Step 3a: Historical post-earnings reactions ────────────────────────────────
+
+def get_post_earnings_reactions(ticker_obj, n: int = HISTORY_QUARTERS) -> list[dict]:
+    """Return last N actual post-earnings next-day % reactions.
+
+    Method: use price history around each past earnings date.
+      pct = (close_1st_trading_day_after_earnings - close_last_day_before_earnings)
+            / close_last_day_before_earnings
+
+    Handles BMO (same-day gap at open) and AMC (next-day gap).
     """
     import pandas as pd
 
     reactions: list[dict] = []
     try:
-        # earnings_dates: DataFrame indexed by date, columns include EPS/Surprise data
         ed = ticker_obj.earnings_dates
         if ed is None or ed.empty:
             return []
 
-        # Filter to past dates only (upcoming earnings are excluded)
         today = date.today()
-        past = ed[ed.index.map(lambda x: x.date() < today)].sort_index(ascending=False)
-
+        past  = ed[ed.index.map(lambda x: x.date() < today)].sort_index(ascending=False)
         if past.empty:
             return []
 
-        # Fetch 2 years of daily price history (covers all recent earnings)
         hist = ticker_obj.history(period="2y", auto_adjust=True)
         if hist.empty:
             return []
-        hist.index = hist.index.map(lambda x: x.date())  # normalise to date objects
-
+        hist.index = hist.index.map(lambda x: x.date())
         price_dates = sorted(hist.index)
 
         for earnings_ts in past.index[:n]:
             earnings_d = earnings_ts.date()
             try:
-                # Find the trading day immediately BEFORE the earnings date
-                before_days = [d for d in price_dates if d < earnings_d]
-                if not before_days:
+                befores = [d for d in price_dates if d < earnings_d]
+                afters  = [d for d in price_dates if d > earnings_d]
+                if not befores or not afters:
                     continue
-                day_before = before_days[-1]
 
-                # Find the trading day ON or immediately AFTER (handles AMC vs BMO)
-                # We use the day AFTER so we capture the full gap + first-day reaction
-                after_days = [d for d in price_dates if d > earnings_d]
-                if not after_days:
-                    # Earnings on last day in our data — use same day close
-                    after_day = earnings_d if earnings_d in price_dates else None
-                else:
-                    after_day = after_days[0]
-
-                if after_day is None:
-                    continue
+                day_before = befores[-1]
+                day_after  = afters[0]
 
                 close_before = float(hist.loc[day_before, "Close"])
-                close_after  = float(hist.loc[after_day,  "Close"])
-
+                close_after  = float(hist.loc[day_after,  "Close"])
                 if close_before <= 0:
                     continue
 
                 pct = (close_after - close_before) / close_before
 
-                # EPS surprise if available
+                # EPS surprise
                 row = past.loc[earnings_ts]
-                eps_surprise = None
-                if "Surprise(%)" in row:
-                    val = row["Surprise(%)"]
-                    if val is not None and str(val) not in ("", "nan", "NaN"):
-                        eps_surprise = round(float(val) / 100, 4)
+                surp = None
+                for col in ("Surprise(%)", "Reported EPS", "EPS Estimate"):
+                    pass   # just access row below
+                try:
+                    surp_val = row.get("Surprise(%)") if hasattr(row, "get") else row["Surprise(%)"] if "Surprise(%)" in row.index else None
+                    surp = round(float(surp_val) / 100, 4) if surp_val is not None and str(surp_val) not in ("nan", "NaN", "") else None
+                except Exception:
+                    surp = None
 
                 reactions.append({
-                    "date":            str(earnings_d),
-                    "pct":             round(pct, 4),
-                    "direction":       "▲" if pct >= 0 else "▼",
-                    "eps_surprise_pct": eps_surprise,
+                    "date":       str(earnings_d),
+                    "pct":        round(pct, 4),
+                    "direction":  "▲" if pct >= 0 else "▼",
+                    "eps_beat":   surp,   # None if unknown
                 })
             except Exception:
                 continue
-
     except Exception:
         pass
-
     return reactions[:n]
 
 
-# ── Direction analysis ─────────────────────────────────────────────────────────
+# ── Step 3b: Direction + conviction ───────────────────────────────────────────
 
-def _analyze_direction(reactions: list[dict], candidate: dict | None) -> dict:
-    """Determine recommended side (LONG/SHORT) and conviction level.
-
-    Logic:
-    - Win-rate LONG  = fraction of past reactions that were positive
-    - Win-rate SHORT = 1 - win_rate_long
-    - Avg move on up-days / down-days
-    - Combine with current technical direction (ret_5d) to resolve ties
-    """
+def analyze_direction(reactions: list[dict], candidate: dict | None, ret_5d: float) -> dict:
+    """Determine LONG vs SHORT and conviction from historical post-earnings moves."""
     if not reactions:
-        ret_5d = float(candidate.get("ret_5d", 0) if candidate else 0)
         side = "LONG" if ret_5d >= 0 else "SHORT"
-        return {
-            "side": side, "win_rate": None,
-            "avg_up": None, "avg_down": None,
-            "conviction": "低（无历史数据）",
-        }
+        return {"side": side, "win_rate": None, "avg_move": None,
+                "conviction": "低（无历史数据）", "history_label": "无历史"}
 
     ups   = [r["pct"] for r in reactions if r["pct"] >= 0]
     downs = [r["pct"] for r in reactions if r["pct"] < 0]
-    win_rate = len(ups) / len(reactions)
+    n     = len(reactions)
+    win_rate_long = len(ups) / n
 
-    avg_up   = round(sum(ups)   / len(ups),   4) if ups   else None
-    avg_down = round(sum(downs) / len(downs), 4) if downs else None
+    avg_abs = sum(abs(r["pct"]) for r in reactions) / n
+    avg_up   = sum(ups)   / len(ups)   if ups   else None
+    avg_down = sum(downs) / len(downs) if downs else None
 
-    ret_5d = float(candidate.get("ret_5d", 0) if candidate else 0)
-
-    # Side determination: majority direction + technicals must agree
-    if win_rate >= 0.6:
-        if ret_5d >= -0.05:   # technicals not severely against
-            side = "LONG"
-        else:
-            side = "LONG"     # historical edge overrides mild weakness
-    elif win_rate <= 0.4:
+    # Determine side: historical bias + technical confirmation
+    if win_rate_long >= 0.6:
+        side = "LONG"
+        wr   = win_rate_long
+    elif win_rate_long <= 0.4:
         side = "SHORT"
+        wr   = 1 - win_rate_long
     else:
-        # 50/50 historically — follow technicals
+        # 50-50 history → follow 5-day technical direction
         side = "LONG" if ret_5d >= 0 else "SHORT"
+        wr   = win_rate_long if side == "LONG" else 1 - win_rate_long
 
-    n = len(reactions)
-    if (side == "LONG"  and win_rate >= 0.8) or (side == "SHORT" and win_rate <= 0.2):
-        conviction = f"极高（{n}次{'上涨' if side == 'LONG' else '下跌'}{int(win_rate*n if side=='LONG' else (1-win_rate)*n)}/{n}）"
-    elif win_rate >= 0.6 or win_rate <= 0.4:
-        conviction = f"中高（胜率{win_rate:.0%}）"
+    # Conviction label
+    wr_side = win_rate_long if side == "LONG" else 1 - win_rate_long
+    if wr_side >= 0.8:
+        conv = f"极高 {int(wr_side * n)}/{n}次{'涨' if side == 'LONG' else '跌'}"
+    elif wr_side >= 0.6:
+        conv = f"中高 {int(wr_side * n)}/{n}次{'涨' if side == 'LONG' else '跌'}"
     else:
-        conviction = f"中等（历史分歧）"
+        conv = f"分歧 历史各半"
+
+    history_label = "  ".join(f"{r['direction']}{r['pct']:+.1%}" for r in reactions)
 
     return {
-        "side":       side,
-        "win_rate":   round(win_rate, 4),
-        "avg_up":     avg_up,
-        "avg_down":   avg_down,
-        "conviction": conviction,
+        "side":        side,
+        "win_rate":    round(wr_side, 4),
+        "avg_move":    round(avg_abs, 4),
+        "avg_up":      round(avg_up,   4) if avg_up   is not None else None,
+        "avg_down":    round(avg_down, 4) if avg_down is not None else None,
+        "conviction":  conv,
+        "history_label": history_label,   # "▲+9.2%  ▼-3.1%  ▲+14.5%  ▲+6.8%  ▲+11.3%"
     }
 
 
-# ── Scoring functions ──────────────────────────────────────────────────────────
+# ── Step 3c: Scoring sub-functions ────────────────────────────────────────────
 
-def _score_historical_reaction(reactions: list[dict], side: str) -> tuple[float, str]:
-    """Score based on actual post-earnings price history (primary signal)."""
+def score_historical(reactions: list[dict], side: str) -> tuple[float, str]:
     if not reactions:
-        return 5.0, "无历史财报价格数据"
-
+        return 5.0, "无历史价格数据"
     n = len(reactions)
-    ups   = [r["pct"] for r in reactions if r["pct"] >= 0]
-    downs = [r["pct"] for r in reactions if r["pct"] < 0]
-    win_rate = (len(ups) if side == "LONG" else len(downs)) / n
-
-    # Magnitude: avg abs move (bigger moves = higher payout potential)
-    all_abs = [abs(r["pct"]) for r in reactions]
-    avg_abs = sum(all_abs) / len(all_abs)
-
-    # Win-rate score (max 20 pts)
+    wins = [r for r in reactions if (r["pct"] >= 0) == (side == "LONG")]
+    win_rate = len(wins) / n
+    avg_abs  = sum(abs(r["pct"]) for r in reactions) / n
     win_score = win_rate * 20.0
-
-    # Magnitude score (max 15 pts): avg >10% move = full 15 pts
-    mag_score = min(15.0, avg_abs * 150)
-
-    total = round(min(35.0, win_score + mag_score), 1)
-
-    # Human-readable history summary
-    history_str = "  ".join(
-        f"{r['direction']}{abs(r['pct']):.1%}"
-        for r in reactions
-    )
-    note = f"近{n}次财报次日: {history_str}  |  {'多' if side=='LONG' else '空'}胜率{win_rate:.0%} 平均振幅{avg_abs:.1%}"
-    return total, note
+    mag_score = min(15.0, avg_abs * 150)   # 10% avg move → 15pts
+    return round(min(35.0, win_score + mag_score), 1), f"胜率{win_rate:.0%} 平均振幅{avg_abs:.1%}"
 
 
-def _score_technical(candidate: dict | None) -> tuple[float, str]:
+def score_technical(candidate: dict | None) -> tuple[float, str]:
     if not candidate:
         return 5.0, "候选池外"
-
     ret_5d  = float(candidate.get("ret_5d",  0))
     ret_20d = float(candidate.get("ret_20d", 0))
     atr_pct = float(candidate.get("atr_pct", 0))
-    notes   = []
-    score   = 0.0
+    score, parts = 0.0, []
 
     if 0.02 <= ret_5d <= 0.15:
-        score += 12.0; notes.append(f"5日漂移{ret_5d:+.1%}【理想】")
+        score += 12.0; parts.append(f"5日{ret_5d:+.1%}漂移理想")
     elif 0 < ret_5d < 0.02:
-        score += 6.0;  notes.append("轻微正漂移")
+        score += 6.0;  parts.append("轻微正漂移")
     elif ret_5d > 0.20:
-        score += 3.0;  notes.append(f"过热{ret_5d:+.1%}【卖消息风险】")
+        score += 2.0;  parts.append(f"过热{ret_5d:+.1%}注意卖消息")
     else:
-        score += 0.0;  notes.append(f"弱势{ret_5d:+.1%}")
+        parts.append(f"弱势{ret_5d:+.1%}")
 
     if ret_20d > 0.05:
-        score += 8.0; notes.append("20日上行趋势")
+        score += 8.0; parts.append("20日上行")
     elif ret_20d > 0:
         score += 4.0
 
     if atr_pct > 0.04:
-        score += 5.0; notes.append("高日内波动")
+        score += 5.0; parts.append("高波动")
 
-    return round(min(25.0, score), 1), "，".join(notes)
+    return round(min(25.0, score), 1), "，".join(parts) or "无明显信号"
 
 
-def _score_analyst(info: dict) -> tuple[float, str]:
+def score_analyst(info: dict) -> tuple[float, str]:
     try:
-        rec  = float(info.get("recommendationMean") or 3.0)
-        tgt  = float(info.get("targetMeanPrice")    or 0)
-        cur  = float(info.get("currentPrice") or info.get("regularMarketPrice") or 0)
-        rating_score = max(0.0, (4.0 - rec) / 3.0 * 15.0)
-        upside_score = 0.0
-        upside_str   = ""
+        rec = float(info.get("recommendationMean") or 3.0)
+        tgt = float(info.get("targetMeanPrice")    or 0)
+        cur = float(info.get("currentPrice") or info.get("regularMarketPrice") or 0)
+        rs  = max(0.0, (4.0 - rec) / 3.0 * 15.0)
+        us  = min(5.0, (tgt - cur) / cur * 20) if cur > 0 and tgt > 0 else 0.0
+        label = f"分析师评级{rec:.1f}/5"
         if cur > 0 and tgt > 0:
-            upside = (tgt - cur) / cur
-            upside_score = min(5.0, upside * 20)
-            upside_str   = f"，目标价{upside:+.1%}"
-        return round(min(20.0, rating_score + upside_score), 1), f"分析师评级{rec:.1f}/5{upside_str}"
+            label += f"  目标价{tgt:.2f}({(tgt-cur)/cur:+.1%})"
+        return round(min(20.0, rs + us), 1), label
     except Exception:
         return 5.0, "分析师数据不可用"
 
 
-def _score_eps_trend(ticker_obj) -> tuple[float, str]:
-    """EPS beat consistency (supplementary to historical price reactions)."""
+def score_eps_trend(ticker_obj) -> tuple[float, str]:
     try:
-        hist = ticker_obj.earnings_history
-        if hist is None or hist.empty:
+        h = ticker_obj.earnings_history
+        if h is None or h.empty or "EPS Estimate" not in h.columns:
             return 0.0, "无EPS历史"
-        h = hist.tail(4)
-        if "EPS Estimate" not in h.columns:
-            return 0.0, "EPS字段缺失"
-        beats, total = 0, 0
-        avg_beat_pct = 0.0
+        h = h.tail(4)
+        beats, total, avg_bp = 0, 0, 0.0
         for _, r in h.iterrows():
             est    = float(r.get("EPS Estimate", 0) or 0)
-            actual = float(r.get("Reported EPS", 0) or 0)
+            actual = float(r.get("Reported EPS",  0) or 0)
             if est != 0:
-                total += 1
-                bp = (actual - est) / abs(est)
-                avg_beat_pct += bp
-                if bp > 0:
-                    beats += 1
-        if total == 0:
+                total += 1; bp = (actual - est) / abs(est); avg_bp += bp
+                if bp > 0: beats += 1
+        if not total:
             return 0.0, "无EPS数据"
-        avg_beat_pct /= total
-        score = min(10.0, max(0.0, (beats / total) * 10 + avg_beat_pct * 30))
-        return round(score, 1), f"EPS近{total}季{beats}季超预期 均值{avg_beat_pct:+.1%}"
+        avg_bp /= total
+        return round(min(10.0, max(0.0, (beats/total) * 10 + avg_bp * 30)), 1), \
+               f"EPS近{total}季{beats}季超预期 均值{avg_bp:+.1%}"
     except Exception:
-        return 0.0, "EPS数据获取失败"
+        return 0.0, "EPS获取失败"
 
 
-# ── Timing + entry ─────────────────────────────────────────────────────────────
+# ── Step 3d: Entry strategy per direction + release timing ────────────────────
 
-def _timing_and_entry(side: str, win_rate: float | None, ret_5d: float, current: float, atr_pct: float) -> dict:
-    """Return timing recommendation and entry price range."""
-    wr = win_rate or 0.5
+def build_entry_strategy(
+    side: str, win_rate: float | None, ret_5d: float,
+    cur: float, atr_pct: float, release_time: str,
+) -> dict:
+    """Compute timing + entry price + SL + targets based on side and release time.
+
+    release_time values from NASDAQ:
+      "time-pre-market"   → BMO: stock gaps at TODAY's open (buy night before or pre-market)
+      "time-after-hours"  → AMC: stock gaps at NEXT DAY's open (buy before today's close)
+      "time-not-supplied" → unknown
+    """
+    wr  = win_rate or 0.5
     atr = atr_pct or 0.03
+    is_bmo = release_time == "time-pre-market"
+    is_amc = release_time == "time-after-hours"
 
     if side == "LONG":
-        if ret_5d > 0.05 and wr >= 0.6:
-            timing = "盘前买入"
-            note   = "强漂移+高胜率，财报前吃漂移"
-            entry_low  = round(current * 0.997, 2)
-            entry_high = round(current * 1.005, 2)
-            stop_loss  = round(current * (1 - atr * 1.5), 2)
-            target_1   = round(current * (1 + atr * 2.0), 2)
-            target_2   = round(current * (1 + atr * 3.5), 2)
-        elif wr >= 0.6:
-            timing = "收盘前买入"
-            note   = "财报当日收盘前最后30分钟建仓"
-            entry_low  = round(current * 0.995, 2)
-            entry_high = round(current * 1.003, 2)
-            stop_loss  = round(current * (1 - atr * 1.5), 2)
-            target_1   = round(current * (1 + atr * 2.0), 2)
-            target_2   = round(current * (1 + atr * 3.5), 2)
+        # Determine WHEN to buy
+        if is_bmo:
+            # Earnings released pre-market — stock gaps at open
+            # Best entry: buy the night BEFORE earnings (or pre-market if strong)
+            if wr >= 0.6 and ret_5d > 0.02:
+                timing      = "盘前买入（财报日前一晚建仓）"
+                timing_note = "BMO财报，提前一天建仓吃gap up"
+            elif wr >= 0.6:
+                timing      = "财报日盘前买入"
+                timing_note = "BMO财报，盘前开盘前市价买入"
+            else:
+                timing      = "观望，等开盘gap确认"
+                timing_note = "胜率不高，等开盘方向确认再追"
+        elif is_amc:
+            # Earnings released after close — stock gaps at next day open
+            # Best entry: buy before today's close (last 30-60 min)
+            if wr >= 0.6 and ret_5d > 0:
+                timing      = "收盘前30分钟建仓（赌AMC财报）"
+                timing_note = "AMC财报，收盘前吃隔夜gap预期"
+            elif wr >= 0.6:
+                timing      = "收盘前观望，尾盘决策"
+                timing_note = "AMC财报，技术偏弱需谨慎"
+            else:
+                timing      = "财报后次日盘前等gap确认"
+                timing_note = "胜率不高，等次日开盘gap up确认"
         else:
-            timing = "盘后买入（等确认）"
-            note   = "等财报发布后gap up确认再追，避免赌方向"
-            gap_entry  = round(current * 1.03, 2)
-            entry_low  = gap_entry
-            entry_high = round(current * 1.06, 2)
-            stop_loss  = round(current * 0.97, 2)
-            target_1   = round(current * (1 + atr * 3.0), 2)
-            target_2   = round(current * (1 + atr * 5.0), 2)
-    else:  # SHORT
-        if wr <= 0.4 and ret_5d < 0.05:
-            timing = "收盘前做空"
-            note   = "财报当日尾盘建空，等财报后gap down"
-        else:
-            timing = "盘后做空（等确认）"
-            note   = "等财报发布后gap down确认再做空"
-        entry_low  = round(current * 0.995, 2)
-        entry_high = round(current * 1.003, 2)
-        stop_loss  = round(current * (1 + atr * 1.5), 2)
-        target_1   = round(current * (1 - atr * 2.0), 2)
-        target_2   = round(current * (1 - atr * 3.5), 2)
+            timing      = "收盘前建仓（发布时间未知）"
+            timing_note = "发布时间不详，收盘前少量建仓"
 
+        el = round(cur * 0.997, 2);  eh = round(cur * 1.005, 2)
+        sl = round(cur * (1 - atr * 1.5), 2)
+        t1 = round(cur * (1 + atr * 2.0), 2)
+        t2 = round(cur * (1 + atr * 3.5), 2)
+
+    else:  # SHORT
+        if is_bmo:
+            timing      = "财报日开盘确认gap down后做空"
+            timing_note = "BMO财报，等开盘确认下跌方向"
+        elif is_amc:
+            timing      = "财报当日收盘前做空"
+            timing_note = "AMC财报，尾盘建空等次日gap down"
+        else:
+            timing      = "财报后确认方向再做空"
+            timing_note = "发布时间不详，确认后做空"
+
+        el = round(cur * 0.995, 2);  eh = round(cur * 1.003, 2)
+        sl = round(cur * (1 + atr * 1.5), 2)
+        t1 = round(cur * (1 - atr * 2.0), 2)
+        t2 = round(cur * (1 - atr * 3.5), 2)
+
+    rr = round(abs(t1 - cur) / abs(cur - sl), 2) if abs(cur - sl) > 0 else 0.0
     return {
-        "timing":     timing,
-        "timing_note": note,
-        "entry_low":  entry_low,
-        "entry_high": entry_high,
-        "stop_loss":  stop_loss,
-        "target_1":   target_1,
-        "target_2":   target_2,
-        "rr":         round(abs(target_1 - current) / abs(current - stop_loss), 2) if current != stop_loss else 0.0,
+        "timing":      timing,
+        "timing_note": timing_note,
+        "entry_low":   el,
+        "entry_high":  eh,
+        "stop_loss":   sl,
+        "target_1":    t1,
+        "target_2":    t2,
+        "rr":          rr,
     }
 
 
-# ── Earnings date lookup ───────────────────────────────────────────────────────
+# ── Step 4: Main screener ──────────────────────────────────────────────────────
 
-def _next_earnings_date(ticker_obj) -> str | None:
-    try:
-        cal = ticker_obj.calendar
-        if not isinstance(cal, dict):
-            return None
-        for d in sorted(cal.get("Earnings Date", [])):
-            try:
-                d_date = d.date() if hasattr(d, "date") else date.fromisoformat(str(d)[:10])
-                if d_date >= date.today():
-                    return str(d_date)
-            except Exception:
-                pass
-        return None
-    except Exception:
-        return None
-
-
-# ── Main screener ──────────────────────────────────────────────────────────────
-
-def screen_earnings_plays(universe_csv_path: Path) -> list[dict]:
-    import pandas as pd
+def screen_earnings_plays() -> list[dict]:
     import yfinance as yf
 
-    universe     = pd.read_csv(universe_csv_path)
-    candidates   = _load_candidates()
-    leading_secs = _load_leading_sectors()
-    today        = date.today()
-    window_end   = today + timedelta(days=EARNINGS_WINDOW_DAYS)
+    today = date.today()
 
-    scan_df = universe[universe["market"].isin(EARNINGS_MARKETS)].copy()
-    print(f"[earnings] Scanning {len(scan_df)} tickers (US+HK) for earnings next {EARNINGS_WINDOW_DAYS}d ...", flush=True)
+    # Step 1: pull full week calendar
+    print(f"[earnings] Fetching NASDAQ earnings calendar ({today} → {today + timedelta(days=EARNINGS_WINDOW_DAYS)}) ...", flush=True)
+    calendar = fetch_earnings_calendar(today, EARNINGS_WINDOW_DAYS)
+    print(f"[earnings] Calendar total: {len(calendar)} stocks next week", flush=True)
+
+    # Step 2: cross-reference with universe
+    matches = cross_reference_universe(calendar)
+    print(f"[earnings] Universe matches: {len(matches)} stocks from our AI universe\n", flush=True)
+
+    # Load supporting data
+    candidates:     dict[str, dict] = {}
+    leading_secs:   set[str]        = set()
+    if CANDIDATES_JSON.exists():
+        data = json.loads(CANDIDATES_JSON.read_text())
+        for c in data.get("candidates", []):
+            candidates[c["symbol"]] = c
+            candidates[c.get("yf_symbol", "")] = c
+
+    today_str = str(today)
+    for mkt in ("us", "ah"):
+        p = PROJECT_ROOT / "reports" / "daily" / f"{today_str}-{mkt}-rotation.json"
+        if p.exists():
+            try:
+                for s in json.loads(p.read_text()).get("leading_sectors_today", []):
+                    leading_secs.add(s.get("sector", ""))
+            except Exception:
+                pass
 
     plays: list[dict] = []
-    checked = found = 0
 
-    for _, urow in scan_df.iterrows():
-        yf_sym  = str(urow["yf_symbol"])
-        our_sym = str(urow["symbol"])
-        market  = str(urow["market"])
+    # Step 3: detailed analysis for each matched stock
+    for entry in matches:
+        yf_sym  = entry["yf_symbol"]
+        our_sym = entry["our_symbol"]
+        print(f"  Analysing {our_sym} ({entry['company_name'][:25]}) — {entry['earnings_date']} {entry['release_time']}", flush=True)
 
         try:
             t = yf.Ticker(yf_sym)
-            earnings_str = _next_earnings_date(t)
-            checked += 1
-
-            if not earnings_str:
-                continue
-            earnings_dt = date.fromisoformat(earnings_str)
-            if not (today <= earnings_dt <= window_end):
-                continue
-            found += 1
-
             info      = t.info or {}
             candidate = candidates.get(our_sym) or candidates.get(yf_sym)
 
-            # ── Core signals ──────────────────────────────────────────────────
-            reactions = _get_post_earnings_reactions(t, n=HISTORY_QUARTERS)
-            direction = _analyze_direction(reactions, candidate)
+            cur_price = float(
+                (candidate or {}).get("current_price")
+                or info.get("currentPrice") or info.get("regularMarketPrice") or 0
+            )
+            atr_pct = float((candidate or {}).get("atr_pct", 0.03))
+            ret_5d  = float((candidate or {}).get("ret_5d",  0.0))
+
+            # Historical reactions
+            reactions = get_post_earnings_reactions(t, HISTORY_QUARTERS)
+            direction = analyze_direction(reactions, candidate, ret_5d)
             side      = direction["side"]
 
-            atr_pct   = float(candidate.get("atr_pct", 0.03) if candidate else 0.03)
-            ret_5d    = float(candidate.get("ret_5d",  0)    if candidate else 0)
-            cur_price = float(
-                candidate.get("current_price") if candidate
-                else info.get("currentPrice") or info.get("regularMarketPrice") or 0
-            )
+            # Scores
+            react_score,  react_note  = score_historical(reactions, side)
+            tech_score,   tech_note   = score_technical(candidate)
+            analyst_score, analyst_note = score_analyst(info)
+            eps_score,    eps_note    = score_eps_trend(t)
+            sect_score = 10.0 if entry["sector"] in leading_secs else 3.0
+            total = round(react_score + tech_score + analyst_score + eps_score + sect_score, 1)
 
-            # ── Scores ────────────────────────────────────────────────────────
-            react_score, react_note = _score_historical_reaction(reactions, side)
-            tech_score,  tech_note  = _score_technical(candidate)
-            analyst_score, analyst_note = _score_analyst(info)
-            eps_score,   eps_note   = _score_eps_trend(t)
-            sector = str(urow.get("sector_tags", "")).split(",")[0].strip()
-            sector_score = 10.0 if sector in leading_secs else 3.0
-
-            total = round(react_score + tech_score + analyst_score + eps_score + sector_score, 1)
             if total < MIN_SCORE:
+                print(f"    → score {total} < {MIN_SCORE}, skipped", flush=True)
                 continue
 
-            # ── Entry strategy ────────────────────────────────────────────────
-            entry = _timing_and_entry(side, direction["win_rate"], ret_5d, cur_price, atr_pct)
+            # Entry strategy
+            entry_plan = build_entry_strategy(
+                side, direction["win_rate"], ret_5d,
+                cur_price, atr_pct, entry["release_time"],
+            )
 
-            rec_mean   = float(info.get("recommendationMean") or 3.0)
             tgt_price  = float(info.get("targetMeanPrice") or 0)
             tgt_upside = round((tgt_price - cur_price) / cur_price, 4) if cur_price > 0 and tgt_price > 0 else 0.0
 
-            play = {
+            plays.append({
+                # Identity
                 "symbol":       our_sym,
                 "yf_symbol":    yf_sym,
-                "company_name": str(urow.get("name", yf_sym)),
-                "market":       market,
-                "sector":       sector,
-                "market_cap":   float(urow.get("market_cap") or 0),
+                "company_name": entry["company_name"],
+                "market":       entry["market"],
+                "sector":       entry["sector"],
+                "market_cap":   entry["market_cap"],
 
-                # Earnings timing
-                "earnings_date":    earnings_str,
-                "days_to_earnings": (earnings_dt - today).days,
+                # Earnings event
+                "earnings_date":    entry["earnings_date"],
+                "days_to_earnings": (date.fromisoformat(entry["earnings_date"]) - today).days,
+                "release_time":     entry["release_time"],    # pre-market / after-hours
+                "eps_forecast":     entry["eps_forecast"],
+                "eps_last_year":    entry["eps_last_year"],
+                "fiscal_quarter":   entry["fiscal_quarter"],
 
                 # Price
                 "current_price": round(cur_price, 4),
@@ -482,29 +522,20 @@ def screen_earnings_plays(universe_csv_path: Path) -> list[dict]:
                 "ret_5d":        round(ret_5d, 4),
 
                 # Direction
-                "side":       side,                         # "LONG" or "SHORT"
-                "win_rate":   direction["win_rate"],        # historical win rate for that side
-                "conviction": direction["conviction"],
-                "avg_up":     direction["avg_up"],          # avg next-day % on up earnings
-                "avg_down":   direction["avg_down"],        # avg next-day % on down earnings
-
-                # Past 5 reactions (newest first)
+                "side":            direction["side"],         # LONG / SHORT
+                "win_rate":        direction["win_rate"],
+                "avg_move":        direction["avg_move"],
+                "conviction":      direction["conviction"],
+                "history_label":   direction["history_label"],  # "▲+9.2%  ▼-3.1%  ..."
                 "historical_reactions": reactions,
 
                 # Entry plan
-                "timing":      entry["timing"],
-                "timing_note": entry["timing_note"],
-                "entry_low":   entry["entry_low"],
-                "entry_high":  entry["entry_high"],
-                "stop_loss":   entry["stop_loss"],
-                "target_1":    entry["target_1"],
-                "target_2":    entry["target_2"],
-                "rr":          entry["rr"],
+                **entry_plan,
 
                 # Analyst
                 "analyst_target": round(tgt_price, 2),
                 "target_upside":  tgt_upside,
-                "rec_mean":       round(rec_mean, 1),
+                "rec_mean":       round(float(info.get("recommendationMean") or 3.0), 1),
 
                 # Scores
                 "total_score": total,
@@ -513,7 +544,7 @@ def screen_earnings_plays(universe_csv_path: Path) -> list[dict]:
                     "technical_setup":     tech_score,
                     "analyst_conviction":  analyst_score,
                     "eps_surprise_trend":  eps_score,
-                    "sector_momentum":     sector_score,
+                    "sector_momentum":     sect_score,
                 },
                 "notes": {
                     "reaction":  react_note,
@@ -521,35 +552,34 @@ def screen_earnings_plays(universe_csv_path: Path) -> list[dict]:
                     "analyst":   analyst_note,
                     "eps":       eps_note,
                 },
-                "is_hot_sector": sector in leading_secs,
-            }
-            plays.append(play)
+                "is_hot_sector": entry["sector"] in leading_secs,
+            })
+            side_emoji = "🟢多" if side == "LONG" else "🔴空"
             print(
-                f"  ✓ {our_sym} — 财报{earnings_str} [{side}] "
-                f"胜率{direction['win_rate']:.0%} if direction['win_rate'] else '' "
-                f"评分{total} {entry['timing']}",
+                f"    → {side_emoji} 胜率{direction['win_rate']:.0%} "
+                f"评分{total}  {entry_plan['timing']}",
                 flush=True,
             )
 
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"    → failed: {exc}", flush=True)
+            continue
 
-        if checked % 20 == 0:
-            time.sleep(0.4)
+        time.sleep(0.3)
 
     plays.sort(key=lambda x: x["total_score"], reverse=True)
-    print(f"[earnings] Checked {checked} | found upcoming earnings {found} | above threshold {len(plays)}", flush=True)
+    print(f"\n[earnings] Done: {len(plays)} plays above threshold (min {MIN_SCORE})", flush=True)
     return plays
 
 
 def main() -> None:
     import datetime
     load_env_file()
-    plays = screen_earnings_plays(PROJECT_ROOT / "data" / "universe_full.csv")
+    plays = screen_earnings_plays()
     payload = {
-        "generated_at":  datetime.datetime.utcnow().isoformat() + "Z",
-        "date":          str(date.today()),
-        "window_days":   EARNINGS_WINDOW_DAYS,
+        "generated_at":   datetime.datetime.utcnow().isoformat() + "Z",
+        "date":           str(date.today()),
+        "window_days":    EARNINGS_WINDOW_DAYS,
         "earnings_plays": plays,
     }
     OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)

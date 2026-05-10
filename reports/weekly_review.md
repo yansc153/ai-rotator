@@ -1,1 +1,5 @@
-# Weekly Review\n\n- report_date: 2026-05-05\n- recommendations_reviewed: 15\n- note: placeholder weekly reviewer output based on current SQLite records\n
+# AI Rotator Weekly Review
+
+- report_date: 2026-05-10
+- recommendations_in_db: 170
+- best_rules_identified: 4
