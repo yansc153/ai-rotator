@@ -319,22 +319,54 @@ def _load_earnings_plays(date_str: str, top_n: int = 3) -> list[dict]:
         return []
 
 
-def _earnings_entry_price(play: dict) -> str:
-    """Suggest entry price range for an earnings play."""
-    cur = float(play.get("current_price", 0))
-    atr_pct = float(play.get("atr_pct", 0.03))
+def _fmt_earnings_history(reactions: list[dict]) -> str:
+    """Format last N post-earnings reactions as a compact string.
+
+    e.g.  ▲+9.2%  ▼-3.1%  ▲+14.5%  ▼-0.8%  ▲+6.3%   (newest → oldest)
+    """
+    if not reactions:
+        return "无历史数据"
+    parts = []
+    for r in reactions:
+        pct = r.get("pct", 0)
+        arrow = "▲" if pct >= 0 else "▼"
+        parts.append(f"{arrow}{pct:+.1%}")
+    return "  ".join(parts)
+
+
+def _fmt_earnings_block(play: dict, idx: int, market_label: dict) -> list[str]:
+    """Format one earnings play as Discord lines."""
+    mkt   = market_label.get(play["market"], play["market"])
+    sec   = _sector_cn(play.get("sector", ""))
+    side  = play.get("side", "LONG")
+    side_emoji = "🟢多" if side == "LONG" else "🔴空"
+    cur   = play.get("current_price", 0)
+    win   = play.get("win_rate")
+    conv  = play.get("conviction", "")
     timing = play.get("timing", "")
-    if cur <= 0:
-        return "参考市价"
-    if timing == "盘前买入":
-        # Buy into strength before earnings — tight range near current
-        return f"{cur * 0.997:.2f}–{cur * 1.005:.2f}"
-    elif timing == "盘后买入":
-        # Wait for post-earnings gap, buy the confirmed gap up
-        return f"等财报后确认方向，参考{cur * 1.02:.2f}–{cur * 1.06:.2f}"
-    else:
-        # Buy before close on earnings day
-        return f"{cur * 0.995:.2f}–{cur * 1.003:.2f}"
+    score  = play.get("total_score", 0)
+    days   = play.get("days_to_earnings", 0)
+    hist   = _fmt_earnings_history(play.get("historical_reactions", []))
+
+    entry_low  = play.get("entry_low",  cur)
+    entry_high = play.get("entry_high", cur)
+    sl         = play.get("stop_loss",  cur)
+    t1         = play.get("target_1",   cur)
+    t2         = play.get("target_2",   cur)
+    rr         = play.get("rr",         0)
+    tgt_up     = play.get("target_upside", 0)
+
+    lines = [
+        f"#{idx} {play['symbol']} {play['company_name']} [{mkt}·{sec}]"
+        f"  {side_emoji}  财报:{play['earnings_date']}({days}天后)  评分:{score:.0f}",
+        f"   过去5次财报次日: {hist}",
+        f"   {'多' if side=='LONG' else '空'}胜率: {win:.0%}" + (f"  | {conv}" if conv else "") if win is not None else f"   {conv}",
+        f"   {timing}  |  买入 {entry_low:.2f}–{entry_high:.2f}  |  SL {sl:.2f}  |  T1 {t1:.2f} T2 {t2:.2f}  |  RR 1:{rr:.1f}",
+        f"   技术面: {play.get('notes', {}).get('technical', '')}",
+    ]
+    if play.get("notes", {}).get("analyst"):
+        lines.append(f"   分析师: {play['notes']['analyst']}")
+    return lines
 
 
 def build_brief_text(date_str: str, session: str = "morning") -> str:
@@ -382,34 +414,13 @@ def build_brief_text(date_str: str, session: str = "morning") -> str:
         lines.append(f"   逻辑：{item.get('thesis') or sec + '中线布局机会'}")
 
     # ── 赌财报板块 ─────────────────────────────────────────────────────────────
-    # Only show on morning session (pre-market is the best time to plan earnings trades)
-    # and only when earnings_plays.json is fresh (generated today)
     earnings_plays = _load_earnings_plays(date_str, top_n=3)
     if earnings_plays:
         offset = len(payload["short_block"]) + len(payload["swing_block"]) + 1
         lines.append("")
         lines.append(f"▌ 🎯 赌财报 — 下周发布 (共{len(earnings_plays)}只)")
         for idx, play in enumerate(earnings_plays, start=offset):
-            mkt = market_label.get(play["market"], play["market"])
-            sec = _sector_cn(play.get("sector", ""))
-            score = play["total_score"]
-            days_to = play["days_to_earnings"]
-            timing = play.get("timing", "观望")
-            entry = _earnings_entry_price(play)
-            upside = play.get("target_upside", 0)
-            surprise_note = play.get("notes", {}).get("surprise", "")
-            tech_note = play.get("notes", {}).get("technical", "")
-
-            lines.append(
-                f"#{idx} {play['symbol']} {play['company_name']} [{mkt}·{sec}]"
-                f"  财报:{play['earnings_date']}({days_to}天后)  评分:{score}/100"
-            )
-            lines.append(
-                f"   策略:{timing}  买入:{entry}"
-                + (f"  目标上行:{upside:+.1%}" if upside != 0 else "")
-            )
-            lines.append(f"   财报面:{surprise_note}")
-            lines.append(f"   技术面:{tech_note}")
+            lines.extend(_fmt_earnings_block(play, idx, market_label))
     return "\n".join(lines)
 
 
