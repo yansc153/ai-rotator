@@ -424,10 +424,14 @@ def analyze_direction(
             side = "LONG" if ret_5d >= 0 else "SHORT"
 
     wr_side = win_rate_long if side == "LONG" else 1 - win_rate_long
-    if wr_side >= 0.8:
-        conv = f"极高 {int(wr_side * n)}/{n}次{'涨' if side == 'LONG' else '跌'}"
+    direction_ch = "涨" if side == "LONG" else "跌"
+    if n < 3:
+        # Too few samples for reliable conviction — show data but label as reference only
+        conv = f"参考 {int(wr_side * n)}/{n}次{direction_ch} ⚠️样本仅{n}次"
+    elif wr_side >= 0.8:
+        conv = f"极高 {int(wr_side * n)}/{n}次{direction_ch}"
     elif wr_side >= 0.6:
-        conv = f"中高 {int(wr_side * n)}/{n}次{'涨' if side == 'LONG' else '跌'}"
+        conv = f"中高 {int(wr_side * n)}/{n}次{direction_ch}"
     else:
         conv = "分歧 历史各半"
 
@@ -470,7 +474,10 @@ def score_implied_edge(
     win_rate = len(wins) / n
     avg_abs  = sum(abs(r["pct"]) for r in reactions) / n
 
-    wr_score = min(15.0, win_rate * 20.0)   # 75% win rate → 15pts
+    # Small-sample confidence factor: penalise when n < 4 to avoid 1/1 = "100% win rate"
+    # n=1 → 0.4, n=2 → 0.6, n=3 → 0.8, n≥4 → 1.0
+    sample_conf = min(1.0, 0.2 + n * 0.2)
+    wr_score = min(15.0, win_rate * 20.0 * sample_conf)
 
     # Magnitude edge: compare to implied
     impl     = implied.get("implied_move")

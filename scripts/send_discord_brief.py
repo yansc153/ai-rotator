@@ -5,7 +5,7 @@ import json
 import os
 import ssl
 import time
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -15,6 +15,18 @@ import certifi
 import yaml
 from _common import PROJECT_ROOT, dump_json, load_env_file
 from run_daily_rotation import build_rotation
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _today_cst() -> str:
+    """Return today's date string in CST (UTC+8), e.g. '2026-05-15'.
+
+    GitHub Actions runs in UTC; calling date.today() at 01:00 UTC (= 09:00 CST)
+    returns the UTC date which is one day behind from the user's perspective.
+    Always use this helper instead of str(date.today()) throughout this module.
+    """
+    return datetime.now(_CST).strftime("%Y-%m-%d")
 
 # ── Session configuration ─────────────────────────────────────────────────
 # Each of the 3 daily pushes has a distinct label, focus, and scoring weights.
@@ -63,7 +75,7 @@ def _load_intraday_overlay(market: str, symbol: str) -> dict[str, float]:
         df = pd.read_csv(path)
         if df.empty or "datetime" not in df.columns:
             return {"ret_intraday": 0.0, "overextended": False}
-        today_str = str(date.today())
+        today_str = _today_cst()
         today_bars = df[df["datetime"].str.startswith(today_str)]
         if today_bars.empty:
             return {"ret_intraday": 0.0, "overextended": False}
@@ -290,14 +302,13 @@ def _data_staleness_note() -> str:
     New pipeline: fetch_all_daily → screen_candidates → candidates.json (with "date" field).
     Stale = generated on a previous date.  Missing = pipeline hasn't run yet.
     """
-    from datetime import date
     try:
         candidates_path = PROJECT_ROOT / "data" / "candidates.json"
         if not candidates_path.exists():
             return "⚠️ 候选股票数据不存在 — 请先运行 fetch_all_daily.py + screen_candidates.py"
         data = json.loads(candidates_path.read_text())
         gen_date = data.get("date", "")
-        if gen_date == str(date.today()):
+        if gen_date == _today_cst():
             return ""  # fresh
         return f"⚠️ 数据陈旧 — candidates.json 生成于 {gen_date}，建议运行 fetch_all_daily.py 更新"
     except Exception:
@@ -507,7 +518,7 @@ def maybe_send(text: str) -> None:
 def main() -> None:
     load_env_file()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", default=str(date.today()))
+    parser.add_argument("--date", default=_today_cst())
     parser.add_argument("--session", default="morning",
                         choices=["morning", "midday", "evening"],
                         help="Which of the 3 daily sessions this push is for")
