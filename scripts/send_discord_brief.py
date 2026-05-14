@@ -279,6 +279,35 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
 
     short_block = _pick_with_diversity(shorts, 5)  # up to 5 short, diverse markets
 
+    # ── Guaranteed market slots in short block ────────────────────────────────
+    # If a market (CN/HK/US) is absent from the short picks, pull its best
+    # available candidate from any horizon so the brief covers all 3 markets.
+    # This prevents scenarios where all 5 slots are taken by one region.
+    markets_in_short = {r["market"] for r in short_block}
+    all_sorted = sorted(all_recs, key=lambda x: x["_session_score"], reverse=True)
+    seen_in_short = {r["symbol"] for r in short_block}
+    for required_market in ("CN", "HK", "US"):
+        if required_market in markets_in_short:
+            continue
+        if focus is not None and required_market not in focus:
+            continue  # session doesn't cover this market — skip
+        # Find the best eligible candidate from this market not already picked
+        for candidate in all_sorted:
+            if candidate.get("market") != required_market:
+                continue
+            if candidate["symbol"] in seen_in_short:
+                continue
+            if candidate.get("_session_score", 0) < 0:
+                continue
+            # Promote to short block: mark horizon override for display
+            candidate = dict(candidate)
+            candidate["horizon"] = "short"
+            short_block.append(candidate)
+            seen_in_short.add(candidate["symbol"])
+            markets_in_short.add(required_market)
+            print(f"[INFO] Promoted {candidate['symbol']} ({required_market}) to short block for market coverage")
+            break
+
     # Swing: exclude symbols already in short_block
     short_syms = {i["symbol"] for i in short_block}
     unique_swings = [r for r in swings if r["symbol"] not in short_syms]
