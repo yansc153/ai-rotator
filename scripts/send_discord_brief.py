@@ -3,14 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import ssl
 import time
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
 import certifi
+import requests  # handles SSL EOF gracefully on Python 3.14+
 
 import yaml
 from _common import PROJECT_ROOT, dump_json, load_env_file
@@ -513,17 +511,23 @@ def build_brief_text(date_str: str, session: str = "morning") -> str:
 
 
 def _send_chunk(token: str, channel_id: str, text: str) -> None:
+    """POST one message chunk to Discord using requests (handles SSL EOF on Python 3.14+)."""
     url = f"{DISCORD_API_HOST}/channels/{channel_id}/messages"
-    req = Request(url, method="POST")
-    req.add_header("Authorization", f"Bot {token}")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Accept", "application/json")
-    req.add_header("User-Agent", "ai-rotator/1.0")
-    body = json.dumps({"content": text, "allowed_mentions": {"parse": []}}, ensure_ascii=False).encode()
-    ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-    with urlopen(req, data=body, timeout=10, context=ssl_ctx) as resp:
-        result = json.load(resp)
-        print(f"Sent message id={result.get('id')}")
+    payload = {"content": text, "allowed_mentions": {"parse": []}}
+    resp = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "ai-rotator/1.0",
+        },
+        data=json.dumps(payload, ensure_ascii=False).encode(),
+        verify=certifi.where(),
+        timeout=15,
+    )
+    resp.raise_for_status()
+    result = resp.json()
+    print(f"Sent message id={result.get('id')}")
 
 
 def maybe_send(text: str) -> None:
@@ -539,8 +543,8 @@ def maybe_send(text: str) -> None:
             time.sleep(1.2)
         try:
             _send_chunk(token, channel_id, chunk)
-        except HTTPError as exc:
-            print(f"[ERROR] Discord send failed: {exc.code} {exc.reason}")
+        except requests.HTTPError as exc:
+            print(f"[ERROR] Discord send failed: {exc.response.status_code} {exc.response.text[:200]}")
             raise
 
 

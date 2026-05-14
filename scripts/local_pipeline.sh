@@ -53,9 +53,9 @@ elif [ -f "$HOME/.venv/bin/activate" ]; then
 fi
 
 # Ensure dependencies are importable
-python3 -c "import yfinance, akshare, pandas" 2>/dev/null || {
+python3 -c "import yfinance, akshare, pandas, yaml" 2>/dev/null || {
   echo "[INFO] Installing dependencies..."
-  pip install -q yfinance akshare pandas pyyaml certifi requests
+  pip3 install -q yfinance akshare pandas pyyaml certifi requests
 }
 
 cd "$REPO_DIR"
@@ -76,24 +76,24 @@ case "$SESSION" in
   morning)
     # Full pipeline: fresh data → screen → earnings → Discord 盘前早报
     # US market closed yesterday → yesterday's close is the latest data
-    run_step "Fetch daily OHLCV (all 3357 stocks)"  "cd $SCRIPTS && python fetch_all_daily.py"
-    run_step "Score and screen candidates"            "cd $SCRIPTS && python screen_candidates.py"
-    run_step "Screen earnings plays (next 7 days)"   "cd $SCRIPTS && python fetch_earnings_plays.py"
-    run_step "Send 盘前早报 to Discord"              "cd $SCRIPTS && python send_discord_brief.py --session morning"
+    run_step "Fetch daily OHLCV (all 3357 stocks)"  "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_step "Score and screen candidates"            "cd $SCRIPTS && python3 screen_candidates.py"
+    run_step "Screen earnings plays (next 7 days)"   "cd $SCRIPTS && python3 fetch_earnings_plays.py"
+    run_step "Send 盘前早报 to Discord"              "cd $SCRIPTS && python3 send_discord_brief.py --session morning"
     ;;
 
   midday)
     # Light update: re-score with existing price cache + update intraday overlay
     # A/HK markets are mid-session; full fetch would be slow, just re-screen
-    run_step "Re-score candidates (existing cache)"  "cd $SCRIPTS && python screen_candidates.py"
-    run_step "Send 盘中播报 to Discord"              "cd $SCRIPTS && python send_discord_brief.py --session midday"
+    run_step "Re-score candidates (existing cache)"  "cd $SCRIPTS && python3 screen_candidates.py"
+    run_step "Send 盘中播报 to Discord"              "cd $SCRIPTS && python3 send_discord_brief.py --session midday"
     ;;
 
   evening)
     # Full pipeline: pick up today's AH closing prices + US pre-market
-    run_step "Fetch daily OHLCV (refresh for AH close)"  "cd $SCRIPTS && python fetch_all_daily.py"
-    run_step "Score and screen candidates"                "cd $SCRIPTS && python screen_candidates.py"
-    run_step "Send 收盘晚报 to Discord"                   "cd $SCRIPTS && python send_discord_brief.py --session evening"
+    run_step "Fetch daily OHLCV (refresh for AH close)"  "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_step "Score and screen candidates"                "cd $SCRIPTS && python3 screen_candidates.py"
+    run_step "Send 收盘晚报 to Discord"                   "cd $SCRIPTS && python3 send_discord_brief.py --session evening"
     ;;
 
   *)
