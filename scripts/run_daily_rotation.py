@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from _common import PROJECT_ROOT, dump_json, load_env_file
 from storage.sqlite import insert_recommendations
+from tradingagents.contracts.decision_chain import SectorDecision
+from tradingagents.agents.rotation.decision_router import build_sector_decision, build_stock_decisions
 from tradingagents.agents.rotation.price_engine import PriceEngineConfig, build_short_term_plan, build_swing_plan
 from tradingagents.agents.rotation.sector_rotation_agent import create_sector_rotation_agent
 from tradingagents.agents.rotation.universe_agent import create_universe_agent
@@ -23,12 +25,18 @@ def build_rotation(market: str, trade_date: str) -> dict:
         "trade_date": trade_date,
         "universe_pools": universe_state["universe_pools"],
     })
+    sector_decision = build_sector_decision(
+        market_scope=market,
+        leaders=rotation_state["leading_sectors_today"],
+        session="rotation",
+    )
+    stock_decisions = build_stock_decisions(rotation_state["candidate_set"], sector_decision)
     # Use enriched candidate_set for ambush pool so LLM theses carry through to swings
-    enriched_ambush = [r for r in rotation_state["candidate_set"] if r.get("pool") == "ambush"]
+    enriched_ambush = [r for r in stock_decisions if r.get("pool") == "ambush"]
     if not enriched_ambush:
         enriched_ambush = universe_state["universe_pools"].get("ambush", [])
     recommendations = build_recommendations(
-        rotation_state["candidate_set"], enriched_ambush, trade_date, market
+        stock_decisions, enriched_ambush, trade_date, market, sector_decision
     )
     return {
         "trade_date": trade_date,
@@ -37,7 +45,9 @@ def build_rotation(market: str, trade_date: str) -> dict:
         "fading_sectors_today": rotation_state["fading_sectors_today"],
         "cross_market_signals": rotation_state["cross_market_signals"],
         "transmission_events": rotation_state["transmission_events"],
-        "candidate_set": rotation_state["candidate_set"],
+        "sector_decision": sector_decision.model_dump(),
+        "candidate_set": stock_decisions,
+        "stock_decisions": stock_decisions,
         "recommendations": recommendations,
     }
 
@@ -51,12 +61,22 @@ def _market_matches(row_market: str, market: str) -> bool:
 
 
 def build_recommendations(
-    candidate_set: list[dict], ambush_pool: list[dict], trade_date: str, market: str
+    candidate_set: list[dict],
+    ambush_pool: list[dict],
+    trade_date: str,
+    market: str,
+    sector_decision: SectorDecision,
 ) -> list[dict]:
     shorts: list[dict] = []
     # Short-term: from day_active candidate_set
     for row in candidate_set:
         if not _market_matches(row["market"], market):
+            continue
+        if row.get("pool") != "day_active":
+            continue
+        if not row.get("active_sector"):
+            continue
+        if row.get("sector") not in sector_decision.active_sector_ids:
             continue
         short_plan = build_short_term_plan(
             row["current_price"],
@@ -74,36 +94,25 @@ def build_recommendations(
                 "plan": short_plan,
                 "thesis": row.get("llm_thesis") or f"{row['sector']} 动量突破",
                 "conviction": min(0.95, 0.55 + row["rotation_score"] / 200),
+                "level1_rotation_regime": sector_decision.rotation_regime,
+                "level1_sector_score": next(
+                    (leader.score for leader in sector_decision.leading_sectors if leader.sector == row["sector"]),
+                    0.0,
+                ),
             })
     shorts = sorted(shorts, key=lambda item: item["rotation_score"], reverse=True)[:5]
 
-    # Swing: primary source = ambush pool (stocks down ≥20% from 20d high — left-side entry)
-    # Fallback: when ambush is empty (bull market / strong momentum), use the lowest-scored
-    # day_active stocks — they have confirmed trend but haven't run far, suit multi-tranche swing entry.
+    # Swing: only use the ambush pool (stocks down ≥20% from 20d high — left-side entry).
+    # If no ambush candidates exist, emit no swing recommendations rather than
+    # fabricating a swing block out of day_active momentum names.
     swing_source = [row for row in ambush_pool if _market_matches(row["market"], market)]
-    if not swing_source:
-        day_active_filtered = [
-            row for row in candidate_set
-            if _market_matches(row["market"], market) and row.get("pool") == "day_active"
-        ]
-        # Lowest rotation_score = least overextended → better swing entry
-        swing_source = sorted(day_active_filtered, key=lambda x: x.get("rotation_score", 0))[:10]
 
     swings: list[dict] = []
     for row in swing_source:
         swing_plan = build_swing_plan(row["current_price"], row["atr14"], market=row["market"])
         if not swing_plan.get("rejected"):
-            is_ambush = row.get("pool") == "ambush"
-            thesis = row.get("llm_thesis") or (
-                f"{row['sector']} 左侧布局" if is_ambush
-                else f"{row['sector']} 强势整理 · 分批布局"
-            )
-            # conviction: ambush uses drawdown_1y depth; fallback uses 20d momentum as proxy
-            if is_ambush:
-                conviction = min(0.90, 0.50 + abs(row.get("drawdown_1y", 0)) * 0.5)
-            else:
-                ret_20d = abs(float(row.get("ret_20d", 0.0)))
-                conviction = min(0.80, 0.45 + ret_20d * 0.8)
+            thesis = row.get("llm_thesis") or f"{row['sector']} 左侧布局"
+            conviction = min(0.90, 0.50 + abs(row.get("drawdown_1y", 0)) * 0.5)
             swings.append({
                 **row,
                 "side": "LONG",
@@ -111,6 +120,11 @@ def build_recommendations(
                 "plan": swing_plan,
                 "thesis": thesis,
                 "conviction": conviction,
+                "level1_rotation_regime": sector_decision.rotation_regime,
+                "level1_sector_score": next(
+                    (leader.score for leader in sector_decision.leading_sectors if leader.sector == row["sector"]),
+                    0.0,
+                ),
             })
     swings = sorted(swings, key=lambda item: item["priority_score"], reverse=True)[:3]
     run_id = str(uuid4())

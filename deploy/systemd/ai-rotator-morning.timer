@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Rotator morning session timer
+
+[Timer]
+Unit=ai-rotator@morning.service
+OnCalendar=Mon..Fri 06:24
+Persistent=true
+
+[Install]
+WantedBy=timers.target

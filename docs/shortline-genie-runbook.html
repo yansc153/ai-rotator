@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI赛道短线精灵 Runbook</title>
+  <style>
+    :root {
+      --ink: #17211b;
+      --muted: #667267;
+      --paper: #f5f1e6;
+      --panel: #fffaf0;
+      --line: #d7c8aa;
+      --green: #1f7a4d;
+      --amber: #b35f00;
+      --red: #a63a2b;
+      --blue: #245c7c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "PingFang SC", "Noto Serif SC", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 16% 10%, rgba(31, 122, 77, .16), transparent 30%),
+        radial-gradient(circle at 84% 18%, rgba(179, 95, 0, .14), transparent 34%),
+        linear-gradient(135deg, #f8f4ea, var(--paper));
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 48px 24px 80px; }
+    header {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 28px;
+      align-items: stretch;
+      margin-bottom: 30px;
+    }
+    h1 {
+      font-size: clamp(44px, 7vw, 92px);
+      line-height: .9;
+      letter-spacing: -0.06em;
+      margin: 0 0 18px;
+    }
+    h2 { font-size: 22px; margin: 0 0 14px; letter-spacing: -.02em; }
+    h3 { margin: 0 0 8px; font-size: 16px; }
+    p { color: var(--muted); line-height: 1.68; margin: 0; }
+    .card {
+      background: rgba(255, 250, 240, .84);
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      padding: 24px;
+      box-shadow: 0 20px 70px rgba(63, 49, 28, .10);
+    }
+    .hero { min-height: 340px; display: flex; flex-direction: column; justify-content: space-between; }
+    .badge { display: inline-flex; width: fit-content; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--green); font-weight: 700; }
+    .kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .kpi { border: 1px solid var(--line); border-radius: 18px; padding: 16px; background: #fffdf8; }
+    .kpi b { display: block; font-size: 28px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin: 18px 0 30px; }
+    .wide { grid-column: 1 / -1; }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; align-items: stretch; }
+    .step { position: relative; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fffdf8; }
+    .step:after { content: "→"; position: absolute; right: -12px; top: 42%; color: var(--amber); font-weight: 900; }
+    .step:last-child:after { content: ""; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 18px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 13px 12px; vertical-align: top; }
+    th { color: var(--ink); background: rgba(31, 122, 77, .08); }
+    code, pre { font-family: "SF Mono", Menlo, monospace; }
+    pre { margin: 0; padding: 18px; border-radius: 18px; background: #17211b; color: #eaf3e8; overflow-x: auto; }
+    .sev-p1 { color: var(--red); font-weight: 800; }
+    .sev-p2 { color: var(--amber); font-weight: 800; }
+    .sev-p3 { color: var(--blue); font-weight: 800; }
+    .pill { display: inline-block; padding: 4px 9px; border-radius: 999px; background: rgba(36, 92, 124, .10); color: var(--blue); margin: 2px; font-size: 12px; font-weight: 700; }
+    @media (max-width: 880px) {
+      header, .grid, .flow { grid-template-columns: 1fr; }
+      .step:after { content: "↓"; right: 18px; top: auto; bottom: -18px; }
+      .step:last-child:after { content: ""; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <section class="card hero">
+      <div>
+        <span class="badge">Runbook · AI Sector Shortline Genie</span>
+        <h1>AI赛道<br>短线精灵</h1>
+        <p>目标不是替你自动交易，而是在 A股、港股、美股里每天收敛出强赛道和最值得盯的 5-8 只 ticker。20:30 的美股产物是 prep watchlist，盘中确认由你执行。</p>
+      </div>
+      <p><b>产品原则：</b>freshness first，少而硬的 ticker 优于宽覆盖；先过滤噪音和财务雷，再做事件与风险加权。</p>
+    </section>
+    <aside class="card">
+      <h2>当前服务拓扑</h2>
+      <div class="kpis">
+        <div class="kpi"><b>07:00</b><span>预热缓存，不推送</span></div>
+        <div class="kpi"><b>12:30</b><span>A/H 午盘信号</span></div>
+        <div class="kpi"><b>20:30</b><span>美股盯盘清单</span></div>
+        <div class="kpi"><b>5-8</b><span>重点 ticker</span></div>
+      </div>
+    </aside>
+  </header>
+
+  <section class="card wide">
+    <h2>Workflow</h2>
+    <div class="flow">
+      <div class="step"><h3>Level 0 数据刷新</h3><p>daily OHLCV、候选池、1h intraday、财报日历。失败时优先保 freshness gate。</p></div>
+      <div class="step"><h3>Level 1 赛道轮动</h3><p>找今天强赛道：AI芯片、GPU、算力、应用、数据中心等。</p></div>
+      <div class="step"><h3>Level 2 个股筛选</h3><p>赛道内按动量、结构、流动性、风险排序，先收敛 ticker。</p></div>
+      <div class="step"><h3>加权/警报层</h3><p>事件、内部人、财务杀雷、宏观、风险调整共同影响优先级。</p></div>
+      <div class="step"><h3>Discord 推送</h3><p>输出强赛道 + 5-8 只盯盘 ticker + 警报，不输出自动买卖指令。</p></div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <article class="card">
+      <h2>P1 可落地</h2>
+      <p><span class="pill">Event-Driven</span><span class="pill">Insider Form 4</span></p>
+      <p>事件层先用 earnings 日历接入，后续追加 buyback、M&A、index rebalance。内部人层作为坑位过滤器，不做日内触发器。</p>
+    </article>
+    <article class="card">
+      <h2>P2 增强</h2>
+      <p><span class="pill">FCF penalty</span><span class="pill">M-Score</span><span class="pill">Z-Score</span></p>
+      <p>第一版不做完整 DCF，先做杀雷：现金流虚弱、操纵利润风险、破产风险和研发资本化异常。</p>
+    </article>
+    <article class="card">
+      <h2>P2 排序</h2>
+      <p><span class="pill">FRED</span><span class="pill">volatility</span><span class="pill">hit-rate</span></p>
+      <p>Sector Rotation+ 与 Risk Optimizer 负责把最刺激的票降权，把更适合日内盯盘的票排前。</p>
+    </article>
+  </section>
+
+  <section class="card wide">
+    <h2>Alerts</h2>
+    <table>
+      <thead><tr><th>Severity</th><th>Condition</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td class="sev-p1">P1</td><td>fetch manifest 非今日或 status 非 ok</td><td>禁止 live Discord 推送，重新跑数据刷新。</td></tr>
+        <tr><td class="sev-p1">P1</td><td>20:30 候选池为空</td><td>检查 US candidates、EastMoney intraday、rotation report。</td></tr>
+        <tr><td class="sev-p2">P2</td><td>warning_layer 出现 Form 4 集群卖出或财务雷</td><td>保留在观察层或降权，不进入优先盯盘。</td></tr>
+        <tr><td class="sev-p2">P2</td><td>ATR/5日涨幅过高</td><td>降权，避免把波动最大的票自动排第一。</td></tr>
+        <tr><td class="sev-p3">P3</td><td>earnings data_limited</td><td>继续展示 ticker，但明确标记数据受限。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="grid">
+    <article class="card">
+      <h2>Manual Procedures</h2>
+      <pre><code>bash scripts/local_pipeline.sh midday
+bash scripts/local_pipeline.sh evening
+python3 scripts/send_discord_brief.py --session evening --dry-run</code></pre>
+    </article>
+    <article class="card">
+      <h2>Verification</h2>
+      <pre><code>pytest -q
+python3 -m py_compile scripts/send_discord_brief.py
+git diff --check
+launchctl list | grep airotator</code></pre>
+    </article>
+    <article class="card">
+      <h2>Data Sources</h2>
+      <p>免费优先：akshare/EastMoney intraday，SEC EDGAR submissions/companyfacts，FRED macro，yfinance/OpenBB calendar，QuantStats/vectorbt 做风险和回测参考。</p>
+    </article>
+  </section>
+</main>
+</body>
+</html>

@@ -1,11 +1,10 @@
 """
 Tests for sector_rotation_agent — focused on fixes from May 2026 audit:
   - _parse_llm_json bare JSONDecodeError (was uncaught)
-  - LLM narrative graceful degradation (claude CLI absent)
+  - LLM narrative graceful degradation (provider unavailable / failure)
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import patch, MagicMock
 
 from tradingagents.agents.rotation.sector_rotation_agent import (
@@ -50,42 +49,35 @@ def test_parse_llm_json_empty_string_returns_empty():
 
 # ─── _generate_llm_narratives graceful degradation ─────────────────────────
 
-def test_generate_llm_narratives_no_claude_cli():
-    """If 'claude' is not on PATH, returns {} without raising."""
-    with patch("shutil.which", return_value=None):
+def test_generate_llm_narratives_provider_unavailable():
+    """If no provider config is available, returns {} without raising."""
+    with patch(
+        "tradingagents.agents.rotation.sector_rotation_agent.generate_json_object",
+        return_value={},
+    ):
         result = _generate_llm_narratives([], [], [])
     assert result == {}
 
 
-def test_generate_llm_narratives_subprocess_timeout():
-    """Subprocess timeout returns {} without propagating."""
-    import subprocess
-    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
-         patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=90)):
+def test_generate_llm_narratives_provider_exception():
+    """Provider exception returns {} without propagating."""
+    with patch(
+        "tradingagents.agents.rotation.sector_rotation_agent.generate_json_object",
+        side_effect=RuntimeError("boom"),
+    ):
         result = _generate_llm_narratives([], [], [])
     assert result == {}
 
 
-def test_generate_llm_narratives_nonzero_exit():
-    """claude CLI non-zero exit code returns {}."""
-    mock_result = MagicMock()
-    mock_result.returncode = 1
-    mock_result.stderr = "error"
-    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
-         patch("subprocess.run", return_value=mock_result):
+def test_generate_llm_narratives_parsed_json():
+    """Provider JSON should flow through unchanged."""
+    payload = {"sector_narratives": {"gpu": "AI领涨"}, "cross_signal_narrative": "", "stock_theses": {}}
+    with patch(
+        "tradingagents.agents.rotation.sector_rotation_agent.generate_json_object",
+        return_value=payload,
+    ):
         result = _generate_llm_narratives([], [], [])
-    assert result == {}
-
-
-def test_generate_llm_narratives_plain_text_llm_output():
-    """Regression: LLM returns prose instead of JSON — must return {} not raise."""
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = "今日AI板块领涨，建议关注GPU赛道。"
-    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
-         patch("subprocess.run", return_value=mock_result):
-        result = _generate_llm_narratives([], [], [])
-    assert result == {}
+    assert result == payload
 
 
 # ─── _apply_narratives ─────────────────────────────────────────────────────

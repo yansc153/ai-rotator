@@ -1,0 +1,18 @@
+services:
+  ai-rotator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-rotator:latest
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      AI_ROTATOR_DB_PATH: ${AI_ROTATOR_DB_PATH:-storage/ai_rotator.db}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./storage:/app/storage
+    command: ["morning"]

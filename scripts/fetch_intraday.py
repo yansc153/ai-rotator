@@ -1,8 +1,7 @@
 """Fetch 1-hour intraday OHLCV bars for screened candidate symbols.
 
-Source of symbols (in priority order):
-    1. data/candidates.json  — top 150 from screen_candidates.py (3357-stock scan)
-    2. config/universe.yaml  — legacy 30-stock fallback if candidates.json is absent
+Source of symbols:
+    1. data/candidates.json  — top screened universe from screen_candidates.py
 
 Saves as:  data/raw/US_NVDA_1h.csv
            data/raw/CN_688256_1h.csv
@@ -12,6 +11,7 @@ Run before each Discord brief so session-aware scoring has fresh intraday data.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import date, timedelta
@@ -21,34 +21,88 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _common import PROJECT_ROOT, load_env_file
 from tradingagents.agents.rotation.common import normalize_symbol_for_file
+from tradingagents.runtime.paths import RAW_DATA_DIR, ensure_runtime_dirs
 
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATES_JSON = ROOT / "data" / "candidates.json"
 
-RAW_DIR = PROJECT_ROOT.parent / "data" / "raw"
-RAW_DIR.mkdir(parents=True, exist_ok=True)
+RAW_DIR = RAW_DATA_DIR
+ensure_runtime_dirs()
 
 _START_DAYS = 7  # pull last 7 calendar days of 1h bars
 _AKSHARE_SLEEP = 1.2  # seconds between akshare intraday calls to avoid rate limits
+_US_TIMEOUT_S = 10
+_US_PREFLIGHT_TIMEOUT_S = 5
+_CNHK_RETRIES = 3
+_US_EASTMONEY_PREFIX = "105"
+
+SESSION_MARKETS = {
+    "morning": {"CN", "HK", "US"},
+    "midday": {"CN", "HK", "US"},
+    "evening": {"US"},
+}
+
+# Morning intraday bars are just cache warm-up because intraday_weight=0.
+# Midday/evening need fresh overlay, but still only for the top slice that can
+# realistically affect the brief.
+SESSION_MAX_SYMBOLS = {
+    "morning": 45,
+    "midday": 40,
+    "evening": 5,
+}
+
+
+def _can_fetch_us_intraday() -> bool:
+    try:
+        import akshare as ak
+
+        df = ak.stock_us_hist_min_em(symbol=f"{_US_EASTMONEY_PREFIX}.AAPL")
+        return df is not None and not df.empty
+    except Exception:
+        return False
 
 
 def fetch_us_intraday(symbol: str) -> bool:
+    import akshare as ak
     import yfinance as yf
 
+    eastmoney_symbol = f"{_US_EASTMONEY_PREFIX}.{symbol}"
+    try:
+        df = ak.stock_us_hist_min_em(symbol=eastmoney_symbol)
+        if df is not None and not df.empty:
+            df = df.rename(columns={
+                "时间": "datetime",
+                "开盘": "open",
+                "收盘": "close",
+                "最高": "high",
+                "最低": "low",
+                "成交量": "volume",
+            })
+            df["datetime"] = df["datetime"].astype(str)
+            out = RAW_DIR / f"US_{symbol}_1h.csv"
+            df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
+            print(f"  US {symbol}: {len(df)} 1h bars via eastmoney, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            return True
+    except Exception as exc:
+        print(f"  US {symbol}: eastmoney failed — {exc}", flush=True)
+
     ticker = yf.Ticker(symbol)
-    df = ticker.history(period="5d", interval="1h", auto_adjust=True)
-    if df.empty:
+    try:
+        df = ticker.history(period="5d", interval="1h", auto_adjust=True, timeout=_US_TIMEOUT_S, prepost=True)
+        if df.empty:
+            return False
+        df = df.reset_index()
+        df.columns = [c.lower() for c in df.columns]
+        dt_col = "datetime" if "datetime" in df.columns else "date"
+        df = df.rename(columns={dt_col: "datetime"})
+        df["datetime"] = df["datetime"].astype(str).str[:19]
+        out = RAW_DIR / f"US_{symbol}_1h.csv"
+        df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
+        print(f"  US {symbol}: {len(df)} 1h bars via yfinance, latest={df['close'].iloc[-1]:.2f}", flush=True)
+        return True
+    except Exception as exc:
+        print(f"  US {symbol}: FAILED — {exc}", flush=True)
         return False
-    df = df.reset_index()
-    df.columns = [c.lower() for c in df.columns]
-    # yfinance returns tz-aware index; strip tz for simple CSV storage
-    dt_col = "datetime" if "datetime" in df.columns else "date"
-    df = df.rename(columns={dt_col: "datetime"})
-    df["datetime"] = df["datetime"].astype(str).str[:19]  # "2026-05-06 14:00:00"
-    out = RAW_DIR / f"US_{symbol}_1h.csv"
-    df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-    print(f"  US {symbol}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}")
-    return True
 
 
 def fetch_cn_intraday(symbol: str) -> bool:
@@ -58,27 +112,32 @@ def fetch_cn_intraday(symbol: str) -> bool:
     raw = symbol.split(".")[0]
     start = (date.today() - timedelta(days=_START_DAYS)).strftime("%Y-%m-%d")
     end = date.today().strftime("%Y-%m-%d")
-    time.sleep(_AKSHARE_SLEEP)
-    try:
-        df = ak.stock_zh_a_hist_min_em(
-            symbol=raw, period="60",
-            start_date=start, end_date=end,
-            adjust="qfq",
-        )
-        if df is None or df.empty:
-            return False
-        df = df.rename(columns={
-            "时间": "datetime", "开盘": "open", "收盘": "close",
-            "最高": "high", "最低": "low", "成交量": "volume",
-        })
-        df["datetime"] = df["datetime"].astype(str)
-        out = RAW_DIR / f"CN_{raw}_1h.csv"
-        df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-        print(f"  CN {raw}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}")
-        return True
-    except Exception as exc:
-        print(f"  CN {raw}: FAILED — {exc}")
-        return False
+    last_exc: Exception | None = None
+    for attempt in range(1, _CNHK_RETRIES + 1):
+        time.sleep(_AKSHARE_SLEEP)
+        try:
+            df = ak.stock_zh_a_hist_min_em(
+                symbol=raw, period="60",
+                start_date=start, end_date=end,
+                adjust="qfq",
+            )
+            if df is None or df.empty:
+                last_exc = RuntimeError("empty intraday response")
+                continue
+            df = df.rename(columns={
+                "时间": "datetime", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+            })
+            df["datetime"] = df["datetime"].astype(str)
+            out = RAW_DIR / f"CN_{raw}_1h.csv"
+            df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
+            print(f"  CN {raw}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            print(f"  CN {raw}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
+    print(f"  CN {raw}: FAILED — {last_exc}", flush=True)
+    return False
 
 
 def fetch_hk_intraday(symbol: str) -> bool:
@@ -89,50 +148,68 @@ def fetch_hk_intraday(symbol: str) -> bool:
     base = normalize_symbol_for_file("HK", symbol)
     start = (date.today() - timedelta(days=_START_DAYS)).strftime("%Y-%m-%d")
     end = date.today().strftime("%Y-%m-%d")
-    time.sleep(_AKSHARE_SLEEP)
-    try:
-        df = ak.stock_hk_hist_min_em(
-            symbol=base, period="60",
-            start_date=start, end_date=end,
-            adjust="qfq",
-        )
-        if df is None or df.empty:
-            return False
-        df = df.rename(columns={
-            "时间": "datetime", "开盘": "open", "收盘": "close",
-            "最高": "high", "最低": "low", "成交量": "volume",
-        })
-        df["datetime"] = df["datetime"].astype(str)
-        out = RAW_DIR / f"HK_{base}_1h.csv"
-        df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-        print(f"  HK {base}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}")
-        return True
-    except Exception as exc:
-        print(f"  HK {base}: FAILED — {exc}")
-        return False
+    last_exc: Exception | None = None
+    for attempt in range(1, _CNHK_RETRIES + 1):
+        time.sleep(_AKSHARE_SLEEP)
+        try:
+            df = ak.stock_hk_hist_min_em(
+                symbol=base, period="60",
+                start_date=start, end_date=end,
+                adjust="qfq",
+            )
+            if df is None or df.empty:
+                last_exc = RuntimeError("empty intraday response")
+                continue
+            df = df.rename(columns={
+                "时间": "datetime", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+            })
+            df["datetime"] = df["datetime"].astype(str)
+            out = RAW_DIR / f"HK_{base}_1h.csv"
+            df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
+            print(f"  HK {base}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            print(f"  HK {base}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
+    print(f"  HK {base}: FAILED — {last_exc}", flush=True)
+    return False
 
 
-def _load_symbols() -> list[tuple[str, str]]:
+def _load_symbols(session: str | None = None, max_symbols: int | None = None) -> list[tuple[str, str]]:
     """Return [(market, symbol), …] for intraday fetching.
-
-    Uses candidates.json (top 150 from 3357-stock screen) when available;
-    falls back to legacy universe.yaml (30 stocks) otherwise.
     """
+    session_markets = SESSION_MARKETS.get(session) if session else None
+    session_limit = max_symbols if max_symbols is not None else SESSION_MAX_SYMBOLS.get(session or "", 0) or None
+
     if CANDIDATES_JSON.exists():
         data = json.loads(CANDIDATES_JSON.read_text())
         candidates = data.get("candidates", [])
-        print(f"[fetch_intraday] Using candidates.json ({len(candidates)} symbols)")
+        if session_markets is not None:
+            candidates = [c for c in candidates if c["market"] in session_markets]
+        if session_limit is not None:
+            candidates = candidates[:session_limit]
+        print(
+            f"[fetch_intraday] Using candidates.json ({len(candidates)} symbols"
+            f"{f', session={session}' if session else ''})",
+            flush=True,
+        )
         return [(c["market"], c["symbol"]) for c in candidates]
 
-    from tradingagents.agents.rotation.common import load_universe
-    items = load_universe()
-    print(f"[fetch_intraday] candidates.json not found — using universe.yaml ({len(items)} symbols)")
-    return [(item.market, item.symbol) for item in items]
+    raise FileNotFoundError(
+        f"[fetch_intraday] candidates.json not found at {CANDIDATES_JSON} — "
+        "run screen_candidates.py first"
+    )
 
 
 def main() -> None:
     load_env_file()
-    symbols = _load_symbols()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--session", choices=["morning", "midday", "evening"])
+    parser.add_argument("--max-symbols", type=int, default=None)
+    args = parser.parse_args()
+
+    symbols = _load_symbols(args.session, args.max_symbols)
     ok = fail = 0
     for market, symbol in symbols:
         try:
@@ -149,9 +226,9 @@ def main() -> None:
             else:
                 fail += 1
         except Exception as exc:
-            print(f"  {market} {symbol}: ERROR — {exc}")
+            print(f"  {market} {symbol}: ERROR — {exc}", flush=True)
             fail += 1
-    print(f"\n完成: {ok} 成功 / {fail} 失败")
+    print(f"\n完成: {ok} 成功 / {fail} 失败", flush=True)
 
 
 if __name__ == "__main__":

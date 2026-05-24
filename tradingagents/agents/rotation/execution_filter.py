@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from tradingagents.agents.rotation.common import normalize_symbol_for_file
+from tradingagents.contracts.decision_chain import ExecutionDecision, FreshnessRecord
+from tradingagents.runtime.paths import PROJECT_ROOT, RAW_DATA_DIR
+
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _today_cst() -> str:
+    return datetime.now(_CST).strftime("%Y-%m-%d")
+
+
+def load_session_rules() -> dict[str, Any]:
+    import yaml
+
+    path = PROJECT_ROOT / "config" / "session_rules.yaml"
+    data = yaml.safe_load(path.read_text()) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def session_meta(session: str) -> dict[str, Any]:
+    sessions = load_session_rules().get("sessions", {})
+    meta = dict(sessions.get(session, sessions.get("morning", {})))
+    focus = meta.get("focus_markets")
+    if focus is not None:
+        meta["focus_markets"] = set(focus)
+    return meta
+
+
+def build_freshness_record(market: str, symbol: str, session: str, trade_date: str) -> FreshnessRecord:
+    normalized = normalize_symbol_for_file(market, symbol)
+    path = RAW_DATA_DIR / f"{market}_{normalized}_1h.csv"
+    source_path = str(path)
+    if not path.exists():
+        return FreshnessRecord(
+            symbol=symbol,
+            market=market,
+            session=session,
+            intraday_status="missing",
+            source_path=source_path,
+        )
+    try:
+        frame = pd.read_csv(path)
+        if frame.empty or "datetime" not in frame.columns:
+            return FreshnessRecord(
+                symbol=symbol,
+                market=market,
+                session=session,
+                intraday_status="failed",
+                source_path=source_path,
+            )
+        today_bars = frame[frame["datetime"].astype(str).str.startswith(trade_date)]
+        if today_bars.empty:
+            return FreshnessRecord(
+                symbol=symbol,
+                market=market,
+                session=session,
+                intraday_status="stale",
+                source_path=source_path,
+            )
+        latest = str(today_bars.iloc[-1]["datetime"])
+        return FreshnessRecord(
+            symbol=symbol,
+            market=market,
+            session=session,
+            intraday_status="fresh",
+            as_of=latest,
+            bars_today=len(today_bars),
+            source_path=source_path,
+        )
+    except Exception:
+        return FreshnessRecord(
+            symbol=symbol,
+            market=market,
+            session=session,
+            intraday_status="failed",
+            source_path=source_path,
+        )
+
+
+def build_freshness_manifest(items: list[dict[str, Any]], session: str, trade_date: str) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    records: list[dict[str, Any]] = []
+    for item in items:
+        key = (item["market"], item["symbol"])
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append(build_freshness_record(item["market"], item["symbol"], session, trade_date).model_dump())
+    return records
+
+
+def _earnings_payload_status(trade_date: str) -> tuple[dict[str, dict[str, Any]], str]:
+    path = PROJECT_ROOT / "data" / "earnings_plays.json"
+    if not path.exists():
+        return {}, "absent"
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return {}, "stale"
+    if payload.get("date") != trade_date:
+        return {}, "stale"
+    plays = payload.get("earnings_plays", [])
+    index = {row["symbol"]: row for row in plays if isinstance(row, dict) and row.get("symbol")}
+    return index, "fresh"
+
+
+def _uses_us_catalyst_gate(session: str, item: dict[str, Any]) -> bool:
+    return session in {"evening", "us_prep", "us_rth_confirm"} and item.get("market") == "US" and item.get("horizon") == "short"
+
+
+def catalyst_status(item: dict[str, Any], session: str, trade_date: str, earnings_index: dict[str, dict[str, Any]], earnings_state: str) -> str:
+    del trade_date
+    if not _uses_us_catalyst_gate(session, item):
+        return "not_applicable"
+    if earnings_state != "fresh":
+        return earnings_state  # absent or stale
+    play = earnings_index.get(item["symbol"])
+    if play is None:
+        return "absent"
+    if play.get("data_limited"):
+        return "data_limited"
+    return "fresh"
+
+
+def classify_candidate(
+    item: dict[str, Any],
+    *,
+    session: str,
+    trade_date: str,
+    active_sector_ids: list[str],
+    earnings_index: dict[str, dict[str, Any]],
+    earnings_state: str,
+) -> dict[str, Any]:
+    meta = session_meta(session)
+    focus = meta.get("focus_markets")
+    freshness = build_freshness_record(item["market"], item["symbol"], session, trade_date)
+    c_status = catalyst_status(item, session, trade_date, earnings_index, earnings_state)
+    horizon = item.get("horizon", "short")
+    reason_codes: list[str] = []
+    invalid_if: list[str] = []
+    push_decision = "tradable_now"
+
+    if focus is not None and item.get("market") not in focus:
+        push_decision = "rejected"
+        reason_codes.append("market_out_of_scope")
+
+    active_sector = bool(item.get("active_sector"))
+    if push_decision == "tradable_now" and horizon == "short" and meta.get("require_active_sector_for_short", True):
+        if not active_sector or item.get("sector") not in active_sector_ids:
+            push_decision = "watch_only"
+            reason_codes.append("not_in_active_sector")
+
+    if push_decision == "tradable_now" and horizon == "short" and meta.get("require_fresh_intraday", False):
+        if freshness.intraday_status != "fresh":
+            push_decision = "watch_only"
+            reason_codes.append(f"intraday_{freshness.intraday_status}")
+
+    min_market_caps = meta.get("min_market_cap", {})
+    min_cap = float(min_market_caps.get(item.get("market"), 0))
+    market_cap = float(item.get("market_cap", 0.0) or 0.0)
+    if push_decision == "tradable_now" and market_cap < min_cap:
+        push_decision = "rejected"
+        reason_codes.append("liquidity_below_floor")
+
+    session_score = float(item.get("_session_score", item.get("rotation_score", 0.0)))
+    if push_decision == "tradable_now" and session_score < 0:
+        push_decision = "rejected"
+        reason_codes.append("session_score_negative")
+
+    if push_decision == "tradable_now" and _uses_us_catalyst_gate(session, item):
+        if c_status == "data_limited":
+            push_decision = "watch_only"
+            reason_codes.append("catalyst_data_limited")
+        elif c_status in {"absent", "stale"}:
+            rank = int(item.get("rank_in_sector", 999))
+            if not (session_score >= float(meta.get("structure_only_min_score", 40.0)) and rank <= int(meta.get("structure_only_max_rank", 3))):
+                push_decision = "watch_only"
+                reason_codes.append("no_catalyst_no_clean_structure")
+
+    if horizon == "swing" and push_decision == "tradable_now":
+        push_decision = "watch_only"
+        reason_codes.append("swing_watch_only")
+
+    if active_sector:
+        invalid_if.append("sector_leader_breaks")
+    if freshness.intraday_status != "fresh":
+        invalid_if.append(f"intraday_{freshness.intraday_status}")
+    if c_status in {"stale", "absent", "data_limited"} and _uses_us_catalyst_gate(session, item):
+        invalid_if.append(f"catalyst_{c_status}")
+
+    score = session_score
+    if active_sector:
+        score += 10.0
+    if freshness.intraday_status == "fresh":
+        score += 5.0
+    if c_status == "fresh":
+        score += 8.0
+    if push_decision == "watch_only":
+        score -= 15.0
+    if push_decision == "rejected":
+        score -= 40.0
+
+    payload = {
+        **item,
+        "push_decision": push_decision,
+        "execution_score": round(score, 4),
+        "reason_codes": reason_codes,
+        "invalid_if": invalid_if,
+        "freshness_status": freshness.intraday_status,
+        "freshness_record": freshness.model_dump(),
+        "catalyst_status": c_status,
+    }
+    ExecutionDecision.model_validate(
+        {
+            "symbol": payload["symbol"],
+            "market": payload["market"],
+            "sector": payload["sector"],
+            "horizon": payload.get("horizon", "short"),
+            "push_decision": payload["push_decision"],
+            "execution_score": float(payload["execution_score"]),
+            "reason_codes": payload["reason_codes"],
+            "invalid_if": payload["invalid_if"],
+            "freshness_status": payload["freshness_status"],
+            "catalyst_status": payload["catalyst_status"],
+            "active_sector": bool(payload.get("active_sector", False)),
+            "rank_in_sector": payload.get("rank_in_sector"),
+            "sector_fit_score": payload.get("sector_fit_score"),
+        }
+    )
+    return payload

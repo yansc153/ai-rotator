@@ -12,15 +12,16 @@
         <string>morning</string>
     </array>
 
-    <!-- 07:00 CST, Mon–Fri (launchd uses local timezone) -->
+    <!-- 06:24 CST, Mon–Fri. This pipeline takes about 35 minutes, so we
+         start earlier to land the Discord push around 07:00 local time. -->
     <!-- Weekday: 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri -->
     <key>StartCalendarInterval</key>
     <array>
-        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>1</integer></dict>
-        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>2</integer></dict>
-        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>3</integer></dict>
-        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>4</integer></dict>
-        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer><key>Weekday</key><integer>5</integer></dict>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>24</integer><key>Weekday</key><integer>1</integer></dict>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>24</integer><key>Weekday</key><integer>2</integer></dict>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>24</integer><key>Weekday</key><integer>3</integer></dict>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>24</integer><key>Weekday</key><integer>4</integer></dict>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>24</integer><key>Weekday</key><integer>5</integer></dict>
     </array>
 
     <key>StandardOutPath</key>

@@ -1,0 +1,97 @@
+sessions:
+  morning:
+    label: "🌅 盘前早报"
+    caption: "美股昨收 + A/HK开盘布局"
+    focus_markets: ["CN", "HK", "US"]
+    send_to_discord: true
+    emit_short_block: true
+    emit_swing_block: true
+    emit_coverage_watch: false
+    emit_earnings: false
+    intraday_weight: 0.0
+    overbought_5d: 0.25
+    overextended_intraday: 999
+    require_fresh_intraday: false
+    require_active_sector_for_short: true
+    structure_only_min_score: 45.0
+    structure_only_max_rank: 3
+    min_market_cap:
+      CN: 5
+      HK: 3
+      US: 4
+  midday:
+    label: "☀️ A股午盘信号"
+    caption: "A/HK午盘决策 + 尾盘预备"
+    focus_markets: ["CN", "HK"]
+    send_to_discord: true
+    strict_send_requires_tradable: true
+    emit_short_block: true
+    emit_swing_block: false
+    emit_coverage_watch: true
+    emit_earnings: false
+    intraday_weight: 0.6
+    overbought_5d: 0.35
+    overextended_intraday: 0.04
+    require_fresh_intraday: false
+    require_active_sector_for_short: true
+    structure_only_min_score: 45.0
+    structure_only_max_rank: 3
+    min_market_cap:
+      CN: 5
+      HK: 3
+      US: 4
+  ah_open:
+    label: "🔔 A股开盘精选"
+    caption: "A/HK开盘前优先盯盘 · 动量 + 赛道共振"
+    focus_markets: ["CN", "HK"]
+    send_to_discord: true
+    workflow_role: "ah_open_watchlist"
+    brief_mode: "watchlist"
+    short_block_source: "watchlist"
+    include_swing_in_watchlist: false
+    short_block_size: 5
+    coverage_watch_size: 3
+    strict_send_requires_tradable: false
+    emit_short_block: true
+    emit_swing_block: false
+    emit_coverage_watch: true
+    emit_earnings: false
+    intraday_weight: 0.0          # pre-open: no intraday data yet
+    overbought_5d: 0.30
+    overextended_intraday: 999
+    require_fresh_intraday: false
+    require_active_sector_for_short: true
+    structure_only_min_score: 40.0
+    structure_only_max_rank: 5
+    min_market_cap:
+      CN: 5
+      HK: 3
+      US: 4
+
+  evening:
+    label: "🧭 AI赛道短线精灵"
+    caption: "20:30 盯盘清单：今日强赛道 + 美股重点ticker"
+    focus_markets: ["US"]
+    send_to_discord: true
+    workflow_role: "us_prep_watchlist"
+    brief_mode: "watchlist"
+    short_block_source: "watchlist"
+    include_swing_in_watchlist: true
+    short_block_size: 8
+    coverage_watch_size: 3
+    strict_send_requires_tradable: false
+    emit_short_block: true
+    emit_swing_block: false
+    emit_coverage_watch: true
+    emit_earnings: false
+    intraday_weight: 0.4
+    overbought_5d: 0.30
+    overextended_intraday: 0.05
+    require_fresh_intraday: false
+    require_active_sector_for_short: true
+    structure_only_min_score: 48.5
+    structure_only_max_rank: 3
+    min_market_cap:
+      CN: 5
+      HK: 3
+      US: 4

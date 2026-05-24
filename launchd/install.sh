@@ -2,13 +2,14 @@
 # launchd/install.sh — Install AI-Rotator launchd agents
 #
 # Usage:
-#   ./launchd/install.sh          # install all 3 agents
-#   ./launchd/install.sh uninstall # remove all 3 agents
+#   ./launchd/install.sh          # install all 4 agents
+#   ./launchd/install.sh uninstall # remove all 4 agents
 #
 # Schedule (all CST / local timezone, Mon–Fri):
-#   07:00 — morning   full pipeline (fetch + screen + earnings + 盘前早报)
-#   12:30 — midday    re-screen + 盘中播报
-#   16:30 — evening   full pipeline (fetch + screen + 收盘晚报)
+#   06:24 — morning   全量OHLCV刷新 + 盘前早报 (到 07:00 左右发出)
+#   08:45 — ah_open   A股开盘精选盯盘清单 (到 09:00-09:10 发出, 09:30 开盘前)
+#   12:30 — midday    A/H 午盘可执行信号
+#   20:30 — evening   AI短线精灵美股盯盘清单
 
 set -euo pipefail
 
@@ -19,6 +20,7 @@ ACTION="${1:-install}"
 
 PLISTS=(
   "com.airotator.morning"
+  "com.airotator.ahopen"
   "com.airotator.midday"
   "com.airotator.evening"
 )
@@ -64,11 +66,12 @@ done
 
 echo ""
 echo "Schedule:"
-echo "  07:00 CST Mon–Fri → morning  (fetch + screen + earnings + 盘前早报)"
-echo "  12:30 CST Mon–Fri → midday   (re-screen + 盘中播报)"
-echo "  16:30 CST Mon–Fri → evening  (fetch + screen + 收盘晚报)"
+echo "  06:24 CST Mon–Fri → morning  (全量OHLCV刷新 → 盘前早报 ~07:00)"
+echo "  08:45 CST Mon–Fri → ah_open  (A股开盘精选盯盘清单 ~09:00-09:10)"
+echo "  12:30 CST Mon–Fri → midday   (A/H 午盘可执行信号)"
+echo "  20:30 CST Mon–Fri → evening  (AI短线精灵美股盯盘清单)"
 echo ""
-echo "Logs: $REPO_DIR/logs/launchd-{morning,midday,evening}.log"
+echo "Logs: $REPO_DIR/logs/launchd-{morning,ahopen,midday,evening}.log"
 echo ""
 echo "To check status:"
 echo "  launchctl list | grep airotator"

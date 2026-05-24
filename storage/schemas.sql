@@ -23,28 +23,35 @@ CREATE TABLE IF NOT EXISTS recommendations (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS outcomes (
+CREATE TABLE IF NOT EXISTS decision_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  recommendation_id INTEGER NOT NULL,
-  review_horizon TEXT NOT NULL,
-  review_date TEXT NOT NULL,
-  close_price REAL NOT NULL,
-  max_favorable_excursion REAL,
-  max_adverse_excursion REAL,
-  pnl_pct REAL NOT NULL,
-  thesis_valid INTEGER NOT NULL,
-  failure_layer TEXT,
-  failure_reason TEXT,
-  reviewer_patch TEXT,
-  FOREIGN KEY (recommendation_id) REFERENCES recommendations(id)
-);
-
-CREATE TABLE IF NOT EXISTS weekly_reviews (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  week_start TEXT NOT NULL,
-  week_end TEXT NOT NULL,
-  summary_md TEXT NOT NULL,
-  worst_five_json TEXT NOT NULL,
-  best_rules_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  run_id TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  session TEXT NOT NULL,
+  market TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  sector TEXT NOT NULL,
+  horizon TEXT NOT NULL,
+  level1_sector_score REAL,
+  level1_rotation_regime TEXT,
+  level2_rank_in_sector INTEGER,
+  level2_sector_fit_score REAL,
+  level3_execution_score REAL,
+  push_decision TEXT NOT NULL,
+  push_reason TEXT NOT NULL,
+  reject_reason_codes TEXT NOT NULL,
+  contract_version TEXT NOT NULL,
+  input_artifact_hash TEXT NOT NULL,
+  freshness_status TEXT,
+  catalyst_status TEXT,
+  entry_triggered INTEGER,
+  stop_hit INTEGER,
+  target_1_hit INTEGER,
+  target_2_hit INTEGER,
+  mfe_pct REAL,
+  mae_pct REAL,
+  outcome_1d REAL,
+  outcome_2d REAL,
+  outcome_5d REAL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

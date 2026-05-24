@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from _common import PROJECT_ROOT, load_env_file
+from tradingagents.runtime import read_fetch_manifest, today_cst
 
 UNIVERSE_CSV = ROOT / "data" / "universe_full.csv"
 DB_PATH      = ROOT / "data" / "daily_cache.db"
@@ -49,6 +50,43 @@ DAY_ACTIVE_ATR_MIN = {"CN": 0.04, "HK": 0.025, "US": 0.035}
 # Guaranteed slots per market in the top-N candidate output.
 # Prevents any single market from monopolising the pool when one region runs hard.
 MARKET_MIN_SLOTS = {"CN": 25, "HK": 20, "US": 15}
+
+# Preserve a minimal amount of non-momentum inventory in the published top-N.
+# Without this, a strong tape can fill the entire output with day_active names,
+# starving downstream swing/watch flows even though valid ambush/watch candidates
+# still exist deeper in the universe.
+POOL_MIN_SLOTS = {"ambush": 5, "watch": 5}
+
+
+def _allowed_latest_dates(market: str) -> set[str]:
+    """Return the set of dates considered 'fresh enough' for screening.
+
+    Always allow today AND yesterday for every market.
+
+    Rationale:
+    - Morning pipeline fires at 06:24 CST — before CN/HK open (09:30 CST) and
+      before US even opens (21:30 CST).  At that time, the freshest available
+      close data for CN/HK/US is from the previous trading day.  Restricting
+      CN/HK to only "today" eliminates every CN stock from the pool before the
+      market has had a chance to trade.
+    - Fetch quality is enforced by fetch_all_daily.py (which always fetches the
+      most recent session available).  The screener's job is to rank what was
+      fetched, not second-guess it.
+    - Allowing 1 prior calendar day handles weekends and holidays gracefully
+      without needing market-calendar logic here.
+    """
+    today = datetime.now(timezone(timedelta(hours=8))).date()
+    return {str(today), str(today - timedelta(days=1))}
+
+
+def _safe_text(value: object, fallback: str) -> str:
+    """Return a clean string, falling back when CSV fields are NaN/blank."""
+    if value is None or pd.isna(value):
+        return fallback
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return fallback
+    return text
 
 
 def _load_price_history(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -192,10 +230,88 @@ def _assign_pool(row: dict) -> str:
     return "watch"
 
 
+def _select_candidates_with_diversity(candidates: list[dict], top_n: int) -> list[dict]:
+    """Select top-N while preserving market and pool diversity."""
+    pool_order = {"day_active": 0, "ambush": 1, "watch": 2}
+    sort_key = lambda x: (pool_order.get(x["pool"], 9), -x["priority_score"])  # noqa: E731
+
+    by_market: dict[str, list[dict]] = {}
+    for candidate in candidates:
+        by_market.setdefault(candidate["market"], []).append(candidate)
+    for market in by_market:
+        by_market[market].sort(key=sort_key)
+
+    result: list[dict] = []
+    seen: set[str] = set()
+
+    # Phase 1: reserved slots per market
+    for market, min_slots in MARKET_MIN_SLOTS.items():
+        pool_mkt = by_market.get(market, [])
+        added = 0
+        for candidate in pool_mkt:
+            if added >= min_slots or len(result) >= top_n:
+                break
+            if candidate["symbol"] in seen:
+                continue
+            result.append(candidate)
+            seen.add(candidate["symbol"])
+            added += 1
+        if added:
+            print(f"  {market}: reserved {added} slots (target {min_slots})")
+
+    # Phase 1b: reserve a small slice for ambush/watch if those pools exist.
+    for pool_name, min_slots in POOL_MIN_SLOTS.items():
+        current = sum(1 for row in result if row["pool"] == pool_name)
+        if current >= min_slots:
+            continue
+        pool_rows = sorted(
+            [row for row in candidates if row["pool"] == pool_name],
+            key=lambda row: row["priority_score"],
+            reverse=True,
+        )
+        for row in pool_rows:
+            if len(result) >= top_n or current >= min_slots:
+                break
+            if row["symbol"] in seen:
+                continue
+            result.append(row)
+            seen.add(row["symbol"])
+            current += 1
+
+    # Phase 2: fill remaining by global score
+    all_sorted = sorted(candidates, key=sort_key)
+    for candidate in all_sorted:
+        if len(result) >= top_n:
+            break
+        if candidate["symbol"] in seen:
+            continue
+        result.append(candidate)
+        seen.add(candidate["symbol"])
+
+    result.sort(key=sort_key)
+    return result[:top_n]
+
+
 def screen(top_n: int = TOP_N) -> list[dict]:
     if not DB_PATH.exists():
-        print("[ERROR] daily_cache.db not found — run fetch_all_daily.py first")
-        return []
+        # Hard-fail: sending a brief from an empty/stale database would be misleading.
+        # The caller (local_pipeline.sh run_critical_step) will catch the non-zero exit.
+        print("[ERROR] daily_cache.db not found — run fetch_all_daily.py first", flush=True)
+        sys.exit(1)
+
+    manifest = read_fetch_manifest()
+    if not manifest:
+        print("[ERROR] fetch_status.json missing — run fetch_all_daily.py first", flush=True)
+        sys.exit(1)
+    if manifest.get("trade_date") != today_cst():
+        print(
+            f"[ERROR] fetch_status.json stale for {manifest.get('trade_date')} — expected {today_cst()}",
+            flush=True,
+        )
+        sys.exit(1)
+    if manifest.get("status") != "ok":
+        print(f"[ERROR] fetch_status.json status={manifest.get('status')} — abort scoring", flush=True)
+        sys.exit(1)
 
     universe = pd.read_csv(UNIVERSE_CSV)
     # Build metadata lookup: symbol → {name, sector_tags, market, yf_symbol, tags, is_loss}
@@ -220,6 +336,10 @@ def screen(top_n: int = TOP_N) -> list[dict]:
     candidates: list[dict] = []
 
     for (market, symbol), grp in prices.groupby(["market", "symbol"]):
+        grp = grp.sort_values("date")
+        latest_date = str(grp["date"].iloc[-1].date())
+        if latest_date not in _allowed_latest_dates(market):
+            continue
         if len(grp) < MIN_DAYS:
             continue
 
@@ -243,13 +363,15 @@ def screen(top_n: int = TOP_N) -> list[dict]:
         pool = _assign_pool({**m, "market": market})
 
         # Primary sector tag: prefer the first meaningful tag (split by ; then ,)
-        raw_tags = info.get("sector_tags", "")
+        raw_tags = _safe_text(info.get("sector_tags", ""), "")
         sector = raw_tags.replace(",", ";").split(";")[0].strip() or market
+        company_name = _safe_text(info.get("name", symbol), symbol)
+        yf_symbol = _safe_text(info.get("yf_symbol", symbol), symbol)
 
         candidates.append({
             "symbol":              symbol,
-            "yf_symbol":           info.get("yf_symbol", symbol),
-            "company_name":        info.get("name", symbol),
+            "yf_symbol":           yf_symbol,
+            "company_name":        company_name,
             "market":              market,
             "sector":              sector,
             "sector_tags":         raw_tags,
@@ -274,47 +396,11 @@ def screen(top_n: int = TOP_N) -> list[dict]:
             "llm_thesis":          "",
         })
 
-    # ── Market-diverse top-N selection ────────────────────────────────────────
-    # Pure score-sort would let CN dominate (3357 stocks → most are CN).
-    # Strategy: guarantee MARKET_MIN_SLOTS per market, then fill remaining by score.
-    pool_order = {"day_active": 0, "ambush": 1, "watch": 2}
-    sort_key = lambda x: (pool_order.get(x["pool"], 9), -x["priority_score"])  # noqa: E731
-
-    by_market: dict[str, list[dict]] = {}
-    for c in candidates:
-        by_market.setdefault(c["market"], []).append(c)
-    for mkt in by_market:
-        by_market[mkt].sort(key=sort_key)
-
-    result: list[dict] = []
-    seen: set[str] = set()
-
-    # Phase 1: reserved slots per market
-    for mkt, min_slots in MARKET_MIN_SLOTS.items():
-        pool_mkt = by_market.get(mkt, [])
-        added = 0
-        for c in pool_mkt:
-            if added >= min_slots:
-                break
-            if c["symbol"] not in seen:
-                result.append(c)
-                seen.add(c["symbol"])
-                added += 1
-        if added:
-            print(f"  {mkt}: reserved {added} slots (target {min_slots})")
-
-    # Phase 2: fill remaining by global score
-    all_sorted = sorted(candidates, key=sort_key)
-    for c in all_sorted:
-        if len(result) >= top_n:
-            break
-        if c["symbol"] not in seen:
-            result.append(c)
-            seen.add(c["symbol"])
-
-    # Final sort for downstream consumers
-    result.sort(key=sort_key)
-    top = result[:top_n]
+    # ── Market-diverse + pool-diverse top-N selection ────────────────────────
+    # Pure score-sort would let CN day_active names dominate in a strong tape.
+    # Preserve enough ambush/watch inventory for downstream swing/watch consumers
+    # while keeping day_active as the clear primary pool.
+    top = _select_candidates_with_diversity(candidates, top_n)
 
     print(f"Scored {len(candidates)} stocks → keeping top {len(top)}")
     pools: dict[str, int] = {}
@@ -324,25 +410,38 @@ def screen(top_n: int = TOP_N) -> list[dict]:
         mkt_counts[c["market"]] = mkt_counts.get(c["market"], 0) + 1
     print(f"  Pools: {pools}")
     print(f"  Markets: {mkt_counts}")
-    return top
+    return top, len(candidates)
 
 
 def main() -> None:
     load_env_file()
-    top = screen()
+
+    # Count scoreable universe before calling screen() so total_screened is accurate.
+    import sqlite3 as _sqlite3
+    _total = 0
+    if DB_PATH.exists():
+        with _sqlite3.connect(DB_PATH) as _conn:
+            _total = _conn.execute(
+                "SELECT COUNT(DISTINCT symbol) FROM daily_prices"
+            ).fetchone()[0]
+
+    top, scoreable_total = screen()
     if not top:
-        print("[WARN] No candidates — cache may be empty")
-        return
+        print("[WARN] No candidates — cache may be empty", flush=True)
+        sys.exit(1)
 
     OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "date": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"),
-        "total_screened": None,  # filled below
+        "total_screened": scoreable_total,
         "candidates": top,
     }
     OUTPUT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-    print(f"Saved {len(top)} candidates → {OUTPUT_JSON}")
+    print(
+        f"Saved {len(top)} candidates (scoreable {scoreable_total} / cached {_total}) → {OUTPUT_JSON}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

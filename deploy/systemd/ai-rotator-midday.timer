@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Rotator midday session timer
+
+[Timer]
+Unit=ai-rotator@midday.service
+OnCalendar=Mon..Fri 12:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

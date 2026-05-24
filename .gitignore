@@ -1,12 +1,19 @@
 logs/
+.pytest_cache/
+.agents/
+.context/
+.omx/
 reports/daily/
 storage/ai_rotator.db
 .env
 __pycache__/
 *.pyc
 .DS_Store
+skills-lock.json
 
 # Generated per-run — do not commit
 data/daily_cache.db
 data/candidates.json
+data/earnings_plays.json
+data/fetch_status.json
 data/raw/

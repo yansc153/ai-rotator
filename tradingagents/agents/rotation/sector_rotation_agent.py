@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Any
 
 from .common import load_research_json
+from tradingagents.runtime.llm import generate_json_object
 
 
 def _market_scope(market: str) -> set[str]:
@@ -122,6 +123,13 @@ def _build_prompt(
 }}"""
 
 
+_NARRATIVE_SYSTEM_PROMPT = (
+    "你是AI赛道股票轮动分析师。"
+    "你只能输出一个 JSON object，不要输出 markdown、代码围栏、解释或额外文字。"
+    "保留用户给出的 JSON 结构与 key，只填写 value。"
+)
+
+
 def _parse_llm_json(raw: str) -> dict[str, Any]:
     raw = raw.strip()
     if "```" in raw:
@@ -143,32 +151,19 @@ def _generate_llm_narratives(
     signals: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Call local Claude CLI (claude -p) to generate Chinese-language narratives. Returns {} on failure."""
-    import shutil
-    import subprocess
-
+    """Generate Chinese-language narratives through the configured API provider."""
     prompt = _build_prompt(leaders, signals, candidates)
-
-    if shutil.which("claude") is None:
-        print("[WARN] claude CLI not found — skipping LLM narratives")
-        return {}
-
     try:
-        result = subprocess.run(
-            ["claude", "-p", prompt],
-            capture_output=True,
-            text=True,
-            timeout=90,
+        parsed = generate_json_object(
+            system_prompt=_NARRATIVE_SYSTEM_PROMPT,
+            user_prompt=prompt,
+            workload="deep",
         )
-        if result.returncode != 0:
-            print(f"[WARN] claude CLI exited {result.returncode}: {result.stderr[:200]}")
+        if not parsed:
+            print("[WARN] LLM provider unavailable or returned empty JSON — skipping narratives")
             return {}
-        parsed = _parse_llm_json(result.stdout)
-        print("[INFO] LLM narratives generated via claude CLI")
+        print("[INFO] LLM narratives generated via provider adapter")
         return parsed
-    except subprocess.TimeoutExpired:
-        print("[WARN] claude CLI timed out — skipping LLM narratives")
-        return {}
     except Exception as exc:
         print(f"[WARN] LLM narrative generation failed: {exc}")
         return {}

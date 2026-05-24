@@ -7,21 +7,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from tradingagents.runtime.paths import PROJECT_ROOT, runtime_db_path, ensure_runtime_dirs
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = PROJECT_ROOT / os.getenv("AI_ROTATOR_DB_PATH", "storage/ai_rotator.db")
 SCHEMA_PATH = PROJECT_ROOT / "storage" / "schemas.sql"
 
 
 def _db_path() -> Path:
-    path = os.getenv("AI_ROTATOR_DB_PATH")
-    if path:
-        return (PROJECT_ROOT / path).resolve() if not Path(path).is_absolute() else Path(path)
-    return DEFAULT_DB_PATH
+    return runtime_db_path()
 
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
+    ensure_runtime_dirs()
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
@@ -46,6 +43,16 @@ def insert_recommendations(rows: list[dict[str, Any]]) -> None:
         return
     ensure_schema()
     with connect() as conn:
+        conn.executemany(
+            """
+            DELETE FROM recommendations
+            WHERE trade_date = :trade_date
+              AND market = :market
+              AND symbol = :symbol
+              AND horizon = :horizon
+            """,
+            rows,
+        )
         conn.executemany(
             """
             INSERT INTO recommendations (
@@ -77,40 +84,49 @@ def list_recommendations(trade_date: str | None = None) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def insert_outcomes(rows: list[dict[str, Any]]) -> None:
+def insert_decision_ledger(rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
     ensure_schema()
     with connect() as conn:
         conn.executemany(
             """
-            INSERT INTO outcomes (
-              recommendation_id, review_horizon, review_date, close_price, max_favorable_excursion,
-              max_adverse_excursion, pnl_pct, thesis_valid, failure_layer, failure_reason, reviewer_patch
+            INSERT INTO decision_ledger (
+              run_id, trade_date, session, market, symbol, sector, horizon,
+              level1_sector_score, level1_rotation_regime, level2_rank_in_sector,
+              level2_sector_fit_score, level3_execution_score, push_decision,
+              push_reason, reject_reason_codes, contract_version, input_artifact_hash,
+              freshness_status, catalyst_status, entry_triggered, stop_hit,
+              target_1_hit, target_2_hit, mfe_pct, mae_pct,
+              outcome_1d, outcome_2d, outcome_5d
             ) VALUES (
-              :recommendation_id, :review_horizon, :review_date, :close_price, :max_favorable_excursion,
-              :max_adverse_excursion, :pnl_pct, :thesis_valid, :failure_layer, :failure_reason, :reviewer_patch
+              :run_id, :trade_date, :session, :market, :symbol, :sector, :horizon,
+              :level1_sector_score, :level1_rotation_regime, :level2_rank_in_sector,
+              :level2_sector_fit_score, :level3_execution_score, :push_decision,
+              :push_reason, :reject_reason_codes, :contract_version, :input_artifact_hash,
+              :freshness_status, :catalyst_status, :entry_triggered, :stop_hit,
+              :target_1_hit, :target_2_hit, :mfe_pct, :mae_pct,
+              :outcome_1d, :outcome_2d, :outcome_5d
             )
             """,
             rows,
         )
 
 
-def list_reviewed_recommendation_ids() -> set[int]:
-    """Return IDs of recommendations that already have at least one outcome row."""
+def list_decision_ledger(trade_date: str | None = None, session: str | None = None) -> list[dict[str, Any]]:
     ensure_schema()
+    query = "SELECT * FROM decision_ledger"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if trade_date:
+        clauses.append("trade_date = ?")
+        params.append(trade_date)
+    if session:
+        clauses.append("session = ?")
+        params.append(session)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id DESC"
     with connect() as conn:
-        rows = conn.execute("SELECT DISTINCT recommendation_id FROM outcomes").fetchall()
-    return {row[0] for row in rows}
-
-
-def write_weekly_review(week_start: str, week_end: str, summary_md: str, worst_five: list[dict[str, Any]], best_rules: list[dict[str, Any]]) -> None:
-    ensure_schema()
-    with connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO weekly_reviews (week_start, week_end, summary_md, worst_five_json, best_rules_json, created_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
-            """,
-            (week_start, week_end, summary_md, json.dumps(worst_five, ensure_ascii=False), json.dumps(best_rules, ensure_ascii=False)),
-        )
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [dict(row) for row in rows]

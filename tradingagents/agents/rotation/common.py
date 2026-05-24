@@ -8,13 +8,19 @@ from typing import Any
 
 import pandas as pd
 import yaml
+from tradingagents.runtime.paths import (
+    PROJECT_ROOT,
+    WORKSPACE_ROOT,
+    RAW_DATA_DIR,
+    DERIVED_DATA_DIR,
+    ensure_runtime_dirs,
+)
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-WORKSPACE_ROOT = PROJECT_ROOT.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
-RAW_DIR = WORKSPACE_ROOT / "data" / "raw"
-DERIVED_DIR = WORKSPACE_ROOT / "data" / "derived"
+RAW_DIR = RAW_DATA_DIR
+DERIVED_DIR = DERIVED_DATA_DIR
+
+ensure_runtime_dirs()
 
 
 @dataclass(frozen=True)

@@ -50,9 +50,10 @@ OUTPUT_JSON     = PROJECT_ROOT / "data" / "earnings_plays.json"
 CANDIDATES_JSON = PROJECT_ROOT / "data" / "candidates.json"
 UNIVERSE_CSV    = PROJECT_ROOT / "data" / "universe_full.csv"
 
-EARNINGS_WINDOW_DAYS = 7    # calendar days to look ahead
-MIN_SCORE            = 35   # minimum total score to include
-HISTORY_QUARTERS     = 5    # post-earnings reactions to show
+EARNINGS_WINDOW_DAYS    = 7    # calendar days to look ahead
+MIN_SCORE               = 35   # minimum total score (full enrichment mode)
+MIN_SCORE_LIMITED       = 10   # minimum total score when Yahoo Finance blocked
+HISTORY_QUARTERS        = 5    # post-earnings reactions to show
 
 
 # ── Step 1: Pull NASDAQ earnings calendar ─────────────────────────────────────
@@ -725,8 +726,26 @@ def screen_earnings_plays() -> list[dict]:
     plays: list[dict] = []
 
     # yfinance rate-limit recovery after fetch_all_daily.py's massive batch
-    print("[earnings] Waiting 45s for yfinance rate-limit recovery ...", flush=True)
-    time.sleep(45)
+    # (skip the 45s sleep if Yahoo Finance is blocked — it won't help)
+    print("[earnings] Checking Yahoo Finance connectivity ...", flush=True)
+    _yf_accessible = False
+    try:
+        import concurrent.futures as _cf
+        import requests as _req
+        _r = _req.get("https://query1.finance.yahoo.com/v1/finance/search?q=AAPL",
+                       timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        _yf_accessible = _r.status_code == 200
+    except Exception:
+        pass
+    if _yf_accessible:
+        print("[earnings] Yahoo Finance reachable — waiting 45s for rate-limit recovery ...", flush=True)
+        time.sleep(45)
+    else:
+        print("[earnings] Yahoo Finance NOT reachable — skipping wait, using NASDAQ calendar data only.", flush=True)
+
+    # yf_blocked: set True once we confirm Yahoo Finance is timing out, to skip
+    # all subsequent per-ticker yfinance calls (reactions, implied, eps_rev).
+    yf_blocked: bool = not _yf_accessible
 
     # Step 3: full financial model for each matched stock
     for entry in matches:
@@ -738,23 +757,49 @@ def screen_earnings_plays() -> list[dict]:
         print(f"  Analysing {our_sym} ({entry['company_name'][:25]}) — {entry['earnings_date']} {entry['release_time']}", flush=True)
 
         # Retry with exponential backoff on rate-limit errors
+        # Use a 12s timeout per attempt — Yahoo Finance is often blocked/slow on CN networks.
+        import concurrent.futures as _cf
+
         info: dict = {}
         t = None
-        for attempt in range(3):
-            try:
-                t    = yf.Ticker(yf_sym)
-                info = t.info or {}
-                break
-            except Exception as exc:
-                if "Too Many Requests" in str(exc) or "Rate limit" in str(exc).lower():
-                    wait = 15 * (2 ** attempt)
-                    print(f"    [rate limit] sleeping {wait}s (attempt {attempt+1}/3)", flush=True)
-                    time.sleep(wait)
-                else:
-                    print(f"    → info fetch failed: {exc}", flush=True)
-                    break
+        if not yf_blocked:
+            for attempt in range(2):  # max 2 attempts (was 3, reduced for speed)
+                try:
+                    _ticker_obj = yf.Ticker(yf_sym)
+
+                    def _fetch_info() -> dict:
+                        return _ticker_obj.info or {}
+
+                    with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                        _fut = _ex.submit(_fetch_info)
+                        try:
+                            info = _fut.result(timeout=12)  # 12s max per attempt
+                            t = _ticker_obj
+                            break
+                        except _cf.TimeoutError:
+                            print(f"    → info fetch timed out after 12s (attempt {attempt+1})", flush=True)
+                            if attempt == 1:
+                                print("    → Yahoo Finance confirmed blocked, skipping yfinance for remaining tickers.", flush=True)
+                                yf_blocked = True
+                except Exception as exc:
+                    if "Too Many Requests" in str(exc) or "Rate limit" in str(exc).lower():
+                        wait = 10 * (2 ** attempt)
+                        print(f"    [rate limit] sleeping {wait}s (attempt {attempt+1}/2)", flush=True)
+                        time.sleep(wait)
+                    else:
+                        print(f"    → info fetch failed: {exc}", flush=True)
+                        yf_blocked = True  # non-rate-limit errors = network blocked
+                        break
+
         if t is None:
-            continue
+            # Proceed without yfinance enrichment.
+            # When yf_blocked, we always continue (universe match is sufficient).
+            # When not yf_blocked but retries failed, require at least candidate data.
+            candidate = candidates.get(our_sym) or candidates.get(yf_sym)
+            if not yf_blocked and not candidate:
+                print(f"    → no candidate data and yf unavailable, skipping", flush=True)
+                continue
+            t = yf.Ticker(yf_sym)  # lazy object — no network calls until attributes accessed
 
         try:
             candidate = candidates.get(our_sym) or candidates.get(yf_sym)
@@ -766,13 +811,17 @@ def screen_earnings_plays() -> list[dict]:
             ret_5d  = float((candidate or {}).get("ret_5d",  0.0))
 
             # 3a) Historical post-earnings reactions
-            reactions = get_post_earnings_reactions(t, HISTORY_QUARTERS)
-
             # 3b) ATM straddle implied move  ← finance-skills: options-payoff
-            implied = get_implied_move(t, entry["earnings_date"], cur_price)
-
             # 3c) EPS revision direction    ← finance-skills: estimate-analysis
-            eps_rev = get_eps_revisions(t)
+            # All three require Yahoo Finance — skip when blocked.
+            if yf_blocked:
+                reactions = []
+                implied   = {"available": False, "implied_move": None}
+                eps_rev   = {}
+            else:
+                reactions = get_post_earnings_reactions(t, HISTORY_QUARTERS)
+                implied   = get_implied_move(t, entry["earnings_date"], cur_price)
+                eps_rev   = get_eps_revisions(t)
 
             # 3d) Direction + conviction
             direction = analyze_direction(reactions, candidate, ret_5d, eps_rev)
@@ -788,8 +837,9 @@ def screen_earnings_plays() -> list[dict]:
 
             total = round(react_score + eps_score + tech_score + analyst_score + liq_score + sect_score, 1)
 
-            if total < MIN_SCORE:
-                print(f"    → score {total} < {MIN_SCORE}, skipped", flush=True)
+            _threshold = MIN_SCORE_LIMITED if yf_blocked else MIN_SCORE
+            if total < _threshold:
+                print(f"    → score {total} < {_threshold}, skipped", flush=True)
                 continue
 
             # 3f) Entry strategy
@@ -883,11 +933,15 @@ def screen_earnings_plays() -> list[dict]:
                     "liquidity": liq_note,
                 },
                 "is_hot_sector": entry["sector"] in leading_secs,
+                # True when Yahoo Finance was unreachable; scores lack options/history enrichment.
+                "data_limited": yf_blocked,
             })
             side_emoji = "🟢多" if side == "LONG" else "🔴空"
+            _wr = direction["win_rate"]
+            _wr_str = f"{_wr:.0%}" if _wr is not None else "N/A"
             print(
-                f"    → {side_emoji} 胜率{direction['win_rate']:.0%} "
-                f"评分{total}  {entry_plan['timing']}  {implied_label}",
+                f"    → {side_emoji} 胜率{_wr_str} "
+                f"评分{total}  {entry_plan.get('timing','N/A')}  {implied_label}",
                 flush=True,
             )
 
@@ -895,8 +949,13 @@ def screen_earnings_plays() -> list[dict]:
             print(f"    → failed: {exc}", flush=True)
             continue
 
-    plays.sort(key=lambda x: x["total_score"], reverse=True)
-    print(f"\n[earnings] Done: {len(plays)} plays above threshold (min {MIN_SCORE})", flush=True)
+    # Primary sort: total_score descending.
+    # Secondary sort (tiebreak for calendar-only mode): days_to_earnings ascending
+    # so the most imminent reports appear first.
+    plays.sort(key=lambda x: (-x["total_score"], x.get("days_to_earnings", 99)))
+    _threshold = MIN_SCORE_LIMITED if yf_blocked else MIN_SCORE
+    _mode = "calendar-only" if yf_blocked else "full"
+    print(f"\n[earnings] Done: {len(plays)} plays above threshold (min {_threshold}, mode={_mode})", flush=True)
     return plays
 
 

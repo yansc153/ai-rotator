@@ -9,14 +9,14 @@ description = "AI Rotator built on top of a vendored TradingAgents fork"
 requires-python = ">=3.11"
 dependencies = [
   "akshare>=1.18.57",
-  "anthropic>=0.34.0",
+  "certifi>=2024.2.2",
   "discord.py>=2.4.0",
   "python-dotenv>=1.0.1",
   "pandas>=2.3.0",
   "pydantic>=2.8.0",
   "PyYAML>=6.0.0",
+  "requests>=2.32.0",
   "yfinance>=0.2.63",
-  "langgraph>=0.4.8",
 ]
 
 [tool.pytest.ini_options]

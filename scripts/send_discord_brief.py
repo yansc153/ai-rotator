@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
-from datetime import date, datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from typing import Any
+from uuid import uuid4
 import certifi
 import requests  # handles SSL EOF gracefully on Python 3.14+
 
 import yaml
-from _common import PROJECT_ROOT, dump_json, load_env_file
-from run_daily_rotation import build_rotation
+from _common import PROJECT_ROOT, load_env_file
+from storage.sqlite import insert_decision_ledger
+from tradingagents.agents.rotation.execution_filter import (
+    build_freshness_manifest,
+    classify_candidate,
+    session_meta as execution_session_meta,
+    _earnings_payload_status,
+)
+from tradingagents.agents.rotation.shortline_enrichment import apply_shortline_enrichment
+from tradingagents.contracts.decision_chain import CONTRACT_VERSION, DecisionLedgerRow, PushPayload
+from tradingagents.runtime import read_fetch_manifest, today_cst
 
 _CST = timezone(timedelta(hours=8))
 
@@ -26,35 +36,13 @@ def _today_cst() -> str:
     """
     return datetime.now(_CST).strftime("%Y-%m-%d")
 
-# ── Session configuration ─────────────────────────────────────────────────
-# Each of the 3 daily pushes has a distinct label, focus, and scoring weights.
-# "intraday_weight" controls how much today's 1h bar movement adjusts the base score.
-SESSION_META = {
-    "morning": {
-        "label": "🌅 盘前早报",
-        "caption": "美股昨收 + A/HK开盘布局",
-        "intraday_weight": 0.0,        # Market not fully open; rely on daily scores
-        "overbought_5d": 0.25,         # Penalise if 5d ret > 25%
-        "overextended_intraday": 999,  # No intraday filter (no data yet)
-        "focus_markets": None,         # All markets: overview of the whole day
-    },
-    "midday": {
-        "label": "☀️ 盘中播报",
-        "caption": "A/HK盘中动量 + 当日焦点",
-        "intraday_weight": 0.6,        # Heavily weight what's actually moving today
-        "overbought_5d": 0.20,         # Tighter overbought filter midday
-        "overextended_intraday": 0.04, # Already up 4%+ today = skip
-        "focus_markets": {"CN", "HK"}, # AH markets are live; show AH stocks only
-    },
-    "evening": {
-        "label": "🌆 收盘晚报",
-        "caption": "A/HK收盘复盘 + 美股夜盘预判",
-        "intraday_weight": 0.4,
-        "overbought_5d": 0.20,
-        "overextended_intraday": 0.05,
-        "focus_markets": {"US"},       # US market opening; show US overnight plays
-    },
-}
+def _session_meta(session: str) -> dict[str, Any]:
+    meta = execution_session_meta(session)
+    if not meta:
+        raise RuntimeError(f"session_rules missing or invalid for session={session}")
+    if "send_to_discord" not in meta:
+        raise RuntimeError(f"session_rules missing send_to_discord for session={session}")
+    return meta
 
 def _load_intraday_overlay(market: str, symbol: str) -> dict[str, float]:
     """Return {ret_intraday, overextended} from latest 1h CSV for today.
@@ -95,22 +83,20 @@ def _session_score(item: dict[str, Any], session: str) -> float:
     2. Intraday momentum    — healthy same-day move boosts score
     3. Overextension penalty — already ran too far today = disqualified
     """
-    cfg = SESSION_META.get(session, SESSION_META["morning"])
+    cfg = _session_meta(session)
     base = float(item.get("rotation_score") or item.get("priority_score") or 0)
 
     # 1. Overbought filter (daily)
     ret_5d = float(item.get("ret_5d", 0.0))
-    if ret_5d > 0.35:
-        # Extremely overbought (>35% in 5 days) — hard exclude: score floor at -200
+    hard_overbought = float(cfg.get("hard_overbought_5d", 0.45))
+    soft_overbought = float(cfg["overbought_5d"])
+    if ret_5d > hard_overbought:
+        # Extremely overbought — hard exclude
         overbought_penalty = base + 200.0
-    elif ret_5d > 0.25:
-        # Very overbought (25-35%): heavy penalty scales with excess
-        excess = ret_5d - 0.25
-        overbought_penalty = 80.0 + excess * 400  # 25%→80, 35%→120
-    elif ret_5d > cfg["overbought_5d"]:
-        # Moderately overbought: moderate penalty
-        excess = ret_5d - cfg["overbought_5d"]
-        overbought_penalty = excess * 300  # ~0-30 pts
+    elif ret_5d > soft_overbought:
+        # Session-tuned overbought penalty.
+        excess = ret_5d - soft_overbought
+        overbought_penalty = excess * 180
     else:
         overbought_penalty = 0.0
 
@@ -153,13 +139,15 @@ DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
 
 
-def _ensure_rotation(date_str: str, market: str) -> dict[str, Any]:
+def _load_rotation(date_str: str, market: str) -> dict[str, Any]:
+    """Load a prebuilt daily rotation report for a given market."""
     path = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-{market.lower()}-rotation.json"
-    if path.exists():
-        return json.loads(path.read_text())
-    payload = build_rotation(market, date_str)
-    dump_json(path, payload)
-    return payload
+    if not path.exists():
+        raise FileNotFoundError(
+            f"[rotation] Missing {market} rotation report for {date_str}: {path}. "
+            "Run run_daily_rotation.py before send_discord_brief.py."
+        )
+    return json.loads(path.read_text())
 
 
 def _cap_tier(market_cap: float) -> str:
@@ -188,8 +176,9 @@ def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
     falls back to rotation_score / priority_score.
     """
     def _score(item: dict) -> float:
-        if "_session_score" in item:
-            return float(item["_session_score"])
+        for key in ("shortline_priority_score", "execution_score", "_session_score"):
+            if key in item:
+                return float(item[key])
         return float(item.get("rotation_score") or item.get("priority_score") or 0)
 
     by_market: dict[str, list[dict]] = {}
@@ -247,80 +236,135 @@ def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
 
 
 def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, Any]:
-    us = _ensure_rotation(date_str, "US")
-    ah = _ensure_rotation(date_str, "AH")
-    all_recs = us["recommendations"] + ah["recommendations"]
+    us = _load_rotation(date_str, "US")
+    ah = _load_rotation(date_str, "AH")
+    if "sector_decision" not in us or "sector_decision" not in ah:
+        raise RuntimeError("rotation report missing sector_decision contract")
+    us_sector = us["sector_decision"]
+    ah_sector = ah["sector_decision"]
+    market_sector = {"US": us_sector, "CN": ah_sector, "HK": ah_sector}
+    all_recs = [dict(row) for row in (us["recommendations"] + ah["recommendations"])]
 
     # Re-rank using session-aware scores (intraday overlay + overbought filter)
-    meta = SESSION_META.get(session, SESSION_META["morning"])
+    meta = _session_meta(session)
     focus = meta.get("focus_markets")  # set of market codes, or None = all markets
+    earnings_index, earnings_state = _earnings_payload_status(date_str)
 
     for rec in all_recs:
         rec["_session_score"] = _session_score(rec, session)
+        sector_meta = market_sector[rec["market"]]
+        leader_scores = {
+            row["sector"]: float(row.get("score", 0.0))
+            for row in sector_meta.get("leading_sectors", [])
+        }
+        rec["level1_rotation_regime"] = sector_meta.get("rotation_regime", "noisy")
+        rec["level1_sector_score"] = leader_scores.get(rec["sector"], 0.0)
+        rec["active_sector"] = bool(
+            rec.get("active_sector", rec["sector"] in sector_meta.get("active_sector_ids", []))
+        )
+        rec["rank_in_sector"] = int(rec.get("rank_in_sector", 999))
+        rec["sector_fit_score"] = float(
+            rec.get("sector_fit_score", rec.get("rotation_score") or rec.get("priority_score") or 0.0)
+        )
+        rec.update(
+            apply_shortline_enrichment(
+                rec,
+                session=session,
+                earnings_index=earnings_index,
+                earnings_state=earnings_state,
+            )
+        )
 
-    def _eligible(r: dict) -> bool:
-        if focus is not None and r.get("market") not in focus:
-            return False
-        # Hard exclude: negative session_score means overbought / overextended
-        if r.get("_session_score", 0) < 0:
-            return False
-        return True
+    classified: list[dict[str, Any]] = []
+    for rec in all_recs:
+        active_sector_ids = list(market_sector[rec["market"]].get("active_sector_ids", []))
+        classified.append(
+            classify_candidate(
+                rec,
+                session=session,
+                trade_date=date_str,
+                active_sector_ids=active_sector_ids,
+                earnings_index=earnings_index,
+                earnings_state=earnings_state,
+            )
+        )
 
-    shorts = sorted(
-        [r for r in all_recs if r["horizon"] == "short" and _eligible(r)],
-        key=lambda x: x["_session_score"], reverse=True,
+    tradable_shorts = sorted(
+        [r for r in classified if r["push_decision"] == "tradable_now" and r["horizon"] == "short"],
+        key=lambda x: x["execution_score"],
+        reverse=True,
     )
-    swings = sorted(
-        [r for r in all_recs if r["horizon"] == "swing" and _eligible(r)],
-        key=lambda x: x["_session_score"], reverse=True,
+    watch_shorts = sorted(
+        [r for r in classified if r["push_decision"] == "watch_only" and r["horizon"] == "short"],
+        key=lambda x: x["execution_score"],
+        reverse=True,
+    )
+    watch_swings = sorted(
+        [r for r in classified if r["push_decision"] != "rejected" and r["horizon"] == "swing"],
+        key=lambda x: x["execution_score"],
+        reverse=True,
+    )
+    rejected = sorted(
+        [r for r in classified if r["push_decision"] == "rejected"],
+        key=lambda x: x["execution_score"],
+        reverse=True,
     )
 
-    short_block = _pick_with_diversity(shorts, 5)  # up to 5 short, diverse markets
+    short_block_size = int(meta.get("short_block_size", 5))
+    coverage_watch_size = int(meta.get("coverage_watch_size", 3))
+    if meta.get("short_block_source") == "watchlist":
+        watchlist_pool = tradable_shorts + watch_shorts
+        if meta.get("include_swing_in_watchlist", False):
+            watchlist_pool += watch_swings
+        short_pool = sorted(
+            watchlist_pool,
+            key=lambda x: float(x.get("shortline_priority_score", x.get("execution_score", 0.0))),
+            reverse=True,
+        )
+    else:
+        short_pool = tradable_shorts
+    short_block = _pick_with_diversity(short_pool, short_block_size)
+    short_syms = {item["symbol"] for item in short_block}
+    coverage_watch = _pick_with_diversity(
+        [item for item in watch_shorts if item["symbol"] not in short_syms],
+        coverage_watch_size,
+    )
+    coverage_syms = {item["symbol"] for item in coverage_watch}
+    swing_block = _pick_with_diversity(
+        [item for item in watch_swings if item["symbol"] not in short_syms and item["symbol"] not in coverage_syms],
+        3,
+    )
 
-    # ── Guaranteed market slots in short block ────────────────────────────────
-    # If a market (CN/HK/US) is absent from the short picks, pull its best
-    # available candidate from any horizon so the brief covers all 3 markets.
-    # This prevents scenarios where all 5 slots are taken by one region.
-    markets_in_short = {r["market"] for r in short_block}
-    all_sorted = sorted(all_recs, key=lambda x: x["_session_score"], reverse=True)
-    seen_in_short = {r["symbol"] for r in short_block}
-    for required_market in ("CN", "HK", "US"):
-        if required_market in markets_in_short:
+    leaders: list[str] = []
+    for market_code in ("CN", "HK", "US"):
+        if focus is not None and market_code not in focus:
             continue
-        if focus is not None and required_market not in focus:
-            continue  # session doesn't cover this market — skip
-        # Find the best eligible candidate from this market not already picked
-        for candidate in all_sorted:
-            if candidate.get("market") != required_market:
-                continue
-            if candidate["symbol"] in seen_in_short:
-                continue
-            if candidate.get("_session_score", 0) < 0:
-                continue
-            # Promote to short block: mark horizon override for display
-            candidate = dict(candidate)
-            candidate["horizon"] = "short"
-            short_block.append(candidate)
-            seen_in_short.add(candidate["symbol"])
-            markets_in_short.add(required_market)
-            print(f"[INFO] Promoted {candidate['symbol']} ({required_market}) to short block for market coverage")
+        for row in market_sector[market_code].get("leading_sectors", []):
+            if row["sector"] not in leaders:
+                leaders.append(row["sector"])
+            if len(leaders) >= 3:
+                break
+        if len(leaders) >= 3:
             break
-
-    # Swing: exclude symbols already in short_block
-    short_syms = {i["symbol"] for i in short_block}
-    unique_swings = [r for r in swings if r["symbol"] not in short_syms]
-    swing_block = _pick_with_diversity(unique_swings, 3)  # up to 3 swing, no repeats
-
-    leaders = [row["sector"] for row in (ah["leading_sectors_today"] + us["leading_sectors_today"])[:3]]
     signal = (ah["cross_market_signals"] or us["cross_market_signals"] or [{}])[0]
-    return {
+    freshness_manifest = build_freshness_manifest(all_recs, session, date_str)
+    payload = {
+        "run_id": str(uuid4()),
         "date": date_str,
         "session": session,
         "leaders": leaders,
         "cross_market_signal": signal,
         "short_block": short_block,
         "swing_block": swing_block,
+        "coverage_watch": coverage_watch,
+        "tradable_now": tradable_shorts,
+        "watch_only": watch_shorts + watch_swings,
+        "rejected": rejected,
+        "freshness_manifest": freshness_manifest,
+        "contract_version": CONTRACT_VERSION,
     }
+    PushPayload.model_validate(payload)
+    return payload
 
 
 def _data_staleness_note() -> str:
@@ -341,10 +385,12 @@ def _data_staleness_note() -> str:
     except Exception:
         pass
     return ""
-
-
 def _load_earnings_plays(date_str: str, top_n: int = 3) -> list[dict]:
-    """Load earnings plays from data/earnings_plays.json, return top_n for today."""
+    """Load earnings plays from data/earnings_plays.json, return top_n for today.
+
+    In calendar-only mode (data_limited=True), show up to top_n+2 extra plays
+    since each card is shorter and the calendar itself is useful for planning.
+    """
     path = PROJECT_ROOT / "data" / "earnings_plays.json"
     if not path.exists():
         return []
@@ -352,7 +398,11 @@ def _load_earnings_plays(date_str: str, top_n: int = 3) -> list[dict]:
         data = json.loads(path.read_text())
         if data.get("date") != date_str:
             return []  # stale — only use same-day data
-        return data.get("earnings_plays", [])[:top_n]
+        plays = data.get("earnings_plays", [])
+        # In limited mode, show more plays (cards are compact)
+        if plays and plays[0].get("data_limited"):
+            return plays[:top_n + 2]
+        return plays[:top_n]
     except Exception:
         return []
 
@@ -432,6 +482,17 @@ def _fmt_earnings_block(play: dict, idx: int, market_label: dict) -> list[str]:
         rev_parts.append(beat_str)
     eps_line = "  ".join(rev_parts) if rev_parts else "EPS修正数据不可用"
 
+    # When data is limited (Yahoo Finance blocked), show a simpler calendar-only card.
+    if play.get("data_limited"):
+        lines = [
+            f"#{idx} {play['symbol']} {play['company_name']} [{mkt}·{sec}]"
+            f"  📅 财报:{play['earnings_date']}({days}天后) {play.get('release_time','').replace('time-','').replace('-',' ')}",
+            f"   预测EPS:{play.get('eps_forecast','N/A')}  上年EPS:{play.get('eps_last_year','N/A')}"
+            f"  季度:{play.get('fiscal_quarter','N/A')}",
+            f"   ⚠️ 历史/期权/评分数据受限（行情接口不可用，仅展示财报日历）",
+        ]
+        return lines
+
     lines = [
         # Line 1: header
         f"#{idx} {play['symbol']} {play['company_name']} [{mkt}·{sec}]"
@@ -455,9 +516,24 @@ def _fmt_earnings_block(play: dict, idx: int, market_label: dict) -> list[str]:
     return lines
 
 
-def build_brief_text(date_str: str, session: str = "morning") -> str:
-    payload = build_brief_payload(date_str, session)
-    meta = SESSION_META.get(session, SESSION_META["morning"])
+def _layer_summary(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    events = item.get("event_tags", [])
+    warnings = item.get("warning_layer", [])
+    if events:
+        parts.append("事件:" + ",".join(events[:3]))
+    if item.get("macro_overlay_score"):
+        parts.append(f"宏观:{float(item['macro_overlay_score']):+.1f}")
+    risk_score = float(item.get("risk_score", 0.0) or 0.0)
+    parts.append(f"风险:{risk_score:+.1f}")
+    if warnings:
+        parts.append("警报:" + ",".join(warnings[:3]))
+    return " | ".join(parts)
+
+
+def build_brief_text(date_str: str, session: str = "morning", payload: dict[str, Any] | None = None) -> str:
+    payload = payload or build_brief_payload(date_str, session)
+    meta = _session_meta(session)
     cn_leaders = " > ".join(_sector_cn(s) for s in payload["leaders"]) if payload["leaders"] else "无"
     signal = payload["cross_market_signal"]
     signal_text = signal.get("narrative", "无跨市场信号")
@@ -471,40 +547,89 @@ def build_brief_text(date_str: str, session: str = "morning") -> str:
     ]
     if staleness:
         lines.append(staleness)
-    lines += [
-        "",
-        f"▌ 短线 1-2天 (共{len(payload['short_block'])}只)",
-    ]
-    for idx, item in enumerate(payload["short_block"], start=1):
-        p = item["plan"]
-        mkt = market_label.get(item["market"], item["market"])
-        sec = _sector_cn(item["sector"])
-        lines.append(f"#{idx} {item['symbol']} {item['company_name']} [LONG] {mkt}·{sec}")
-        lines.append(
-            f"   现价 {item['current_price']:.2f} | 买入 {p['entry_low']:.2f}-{p['entry_high']:.2f} | "
-            f"T1 {p['target_1']:.2f} T2 {p['target_2']:.2f} | SL {p['stop_loss']:.2f} | RR 1:{p['rr']:.2f}"
-        )
-        lines.append(f"   触发：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
-    lines.append("")
-    lines.append(f"▌ 中长线 1-3月 (共{len(payload['swing_block'])}只)")
-    for idx, item in enumerate(payload["swing_block"], start=len(payload["short_block"]) + 1):
-        p = item["plan"]
-        mkt = market_label.get(item["market"], item["market"])
-        sec = _sector_cn(item["sector"])
-        lines.append(f"#{idx} {item['symbol']} {item['company_name']} [LONG] {mkt}·{sec}")
-        lines.append(
-            f"   现价 {item['current_price']:.2f} | 三档买入 "
-            f"{p['entry_tranches'][0]:.2f}/{p['entry_tranches'][1]:.2f}/{p['entry_tranches'][2]:.2f} | "
-            f"SL {p['stop_loss']:.2f} | T1 {p['target_1']:.2f} T2 {p['target_2']:.2f}"
-        )
-        lines.append(f"   逻辑：{item.get('thesis') or sec + '中线布局机会'}")
+    emit_short = bool(meta.get("emit_short_block", True))
+    emit_swing = bool(meta.get("emit_swing_block", True))
+    emit_watch = bool(meta.get("emit_coverage_watch", True))
+    emit_earnings = bool(meta.get("emit_earnings", True))
+
+    offset = 1
+    watchlist_mode = meta.get("brief_mode") == "watchlist"
+    if emit_short:
+        lines += [
+            "",
+            f"▌ {'今日优先盯盘 ticker' if watchlist_mode else '短线 1-2天'} (共{len(payload['short_block'])}只)",
+        ]
+        if watchlist_mode:
+            lines.append("说明：这是开盘前盯盘清单，不是自动买入指令；盘中只执行你自己确认的突破/回踩。")
+        for idx, item in enumerate(payload["short_block"], start=1):
+            mkt = market_label.get(item["market"], item["market"])
+            sec = _sector_cn(item["sector"])
+            decision = "优先" if item.get("push_decision") == "tradable_now" else "观察"
+            lines.append(f"#{idx} {item['symbol']} {item['company_name']} [{decision}] {mkt}·{sec}")
+            if watchlist_mode:
+                lines.append(
+                    f"   现价 {item['current_price']:.2f} | 5日 {item.get('ret_5d', 0.0):+.1%} | "
+                    f"ATR {item.get('atr_pct', 0.0):.1%} | pool={item.get('pool','watch')}"
+                )
+                lines.append(
+                    f"   盯盘：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}"
+                )
+                lines.append(f"   加权：{_layer_summary(item)}")
+            else:
+                p = item["plan"]
+                lines.append(
+                    f"   现价 {item['current_price']:.2f} | 买入 {p['entry_low']:.2f}-{p['entry_high']:.2f} | "
+                    f"T1 {p['target_1']:.2f} T2 {p['target_2']:.2f} | SL {p['stop_loss']:.2f} | RR 1:{p['rr']:.2f}"
+                )
+                lines.append(f"   触发：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
+        offset += len(payload["short_block"])
+    if emit_swing:
+        lines.append("")
+        lines.append(f"▌ 中长线 1-3月 (共{len(payload['swing_block'])}只)")
+        for idx, item in enumerate(payload["swing_block"], start=offset):
+            p = item["plan"]
+            mkt = market_label.get(item["market"], item["market"])
+            sec = _sector_cn(item["sector"])
+            lines.append(f"#{idx} {item['symbol']} {item['company_name']} [LONG] {mkt}·{sec}")
+            lines.append(
+                f"   现价 {item['current_price']:.2f} | 三档买入 "
+                f"{p['entry_tranches'][0]:.2f}/{p['entry_tranches'][1]:.2f}/{p['entry_tranches'][2]:.2f} | "
+                f"SL {p['stop_loss']:.2f} | T1 {p['target_1']:.2f} T2 {p['target_2']:.2f}"
+            )
+            lines.append(f"   逻辑：{item.get('thesis') or sec + '中线布局机会'}")
+        offset += len(payload["swing_block"])
+    if emit_watch and payload.get("coverage_watch"):
+        lines.append("")
+        lines.append(f"▌ 市场覆盖观察名单 (共{len(payload['coverage_watch'])}只)")
+        for idx, item in enumerate(
+            payload["coverage_watch"],
+            start=offset,
+        ):
+            mkt = market_label.get(item["market"], item["market"])
+            sec = _sector_cn(item["sector"])
+            lines.append(f"#{idx} {item['symbol']} {item['company_name']} [{mkt}·{sec}]")
+            lines.append(
+                f"   现价 {item['current_price']:.2f} | pool={item.get('pool','watch')} | "
+                f"5日 {item.get('ret_5d', 0.0):+.1%} | ATR {item.get('atr_pct', 0.0):.1%}"
+            )
+            lines.append(
+                f"   观察：{item.get('thesis') or sec + ' 值得跟踪'}，"
+                "因市场覆盖需要单列展示，当前不归类为短线 1-2 天推荐。"
+            )
+        offset += len(payload["coverage_watch"])
 
     # ── 赌财报板块 ─────────────────────────────────────────────────────────────
     earnings_plays = _load_earnings_plays(date_str, top_n=3)
-    if earnings_plays:
-        offset = len(payload["short_block"]) + len(payload["swing_block"]) + 1
+    if emit_earnings and earnings_plays:
         lines.append("")
-        lines.append(f"▌ 🎯 赌财报 — 下周发布 (共{len(earnings_plays)}只)")
+        # Header: if any play is reporting today (0天后), say "本周发布", else "下周发布"
+        _min_days = min((p.get("days_to_earnings", 99) for p in earnings_plays), default=99)
+        _earn_window = "今日/本周" if _min_days <= 2 else "下周"
+        _limited_note = " ⚠️限量数据" if earnings_plays[0].get("data_limited") else ""
+        earnings_title = "▌ 🎯 赌财报"
+        if earnings_plays[0].get("data_limited"):
+            earnings_title = "▌ 📅 财报日历观察"
+        lines.append(f"{earnings_title} — {_earn_window}发布 (共{len(earnings_plays)}只){_limited_note}")
         for idx, play in enumerate(earnings_plays, start=offset):
             lines.extend(_fmt_earnings_block(play, idx, market_label))
     return "\n".join(lines)
@@ -548,20 +673,88 @@ def maybe_send(text: str) -> None:
             raise
 
 
+def _input_artifact_hash(date_str: str) -> str:
+    digest = hashlib.sha256()
+    candidates = PROJECT_ROOT / "data" / "candidates.json"
+    us_report = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-us-rotation.json"
+    ah_report = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-ah-rotation.json"
+    earnings = PROJECT_ROOT / "data" / "earnings_plays.json"
+    session_rules = PROJECT_ROOT / "config" / "session_rules.yaml"
+    for path in (candidates, us_report, ah_report, earnings, session_rules):
+        if path.exists():
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _persist_decision_ledger(payload: dict[str, Any]) -> None:
+    artifact_hash = _input_artifact_hash(payload["date"])
+    rows: list[dict[str, Any]] = []
+    all_items = payload.get("tradable_now", []) + payload.get("watch_only", []) + payload.get("rejected", [])
+    for item in all_items:
+        row = DecisionLedgerRow.model_validate(
+            {
+                "run_id": payload["run_id"],
+                "trade_date": payload["date"],
+                "session": payload["session"],
+                "market": item["market"],
+                "symbol": item["symbol"],
+                "sector": item["sector"],
+                "horizon": item.get("horizon", "short"),
+                "level1_sector_score": item.get("level1_sector_score"),
+                "level1_rotation_regime": item.get("level1_rotation_regime"),
+                "level2_rank_in_sector": item.get("rank_in_sector"),
+                "level2_sector_fit_score": item.get("sector_fit_score"),
+                "level3_execution_score": item.get("execution_score"),
+                "push_decision": item.get("push_decision", "rejected"),
+                "push_reason": ",".join(item.get("reason_codes", [])) or item.get("push_decision", "rejected"),
+                "reject_reason_codes": json.dumps(item.get("reason_codes", []), ensure_ascii=False),
+                "contract_version": payload.get("contract_version", CONTRACT_VERSION),
+                "input_artifact_hash": artifact_hash,
+                "freshness_status": item.get("freshness_status"),
+                "catalyst_status": item.get("catalyst_status"),
+                "entry_triggered": None,
+                "stop_hit": None,
+                "target_1_hit": None,
+                "target_2_hit": None,
+                "mfe_pct": None,
+                "mae_pct": None,
+                "outcome_1d": None,
+                "outcome_2d": None,
+                "outcome_5d": None,
+            }
+        )
+        rows.append(row.model_dump())
+    insert_decision_ledger(rows)
+
+
 def main() -> None:
     load_env_file()
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default=_today_cst())
     parser.add_argument("--session", default="morning",
-                        choices=["morning", "midday", "evening"],
-                        help="Which of the 3 daily sessions this push is for")
+                        choices=["morning", "ah_open", "midday", "evening"],
+                        help="Which daily session to push (morning/ah_open/midday/evening)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    text = build_brief_text(args.date, args.session)
+    payload = build_brief_payload(args.date, args.session)
+    text = build_brief_text(args.date, args.session, payload=payload)
     if args.dry_run:
         print(text)
         return
+    if not _session_meta(args.session).get("send_to_discord", True):
+        print("[INFO] session configured as no-send warmup; skipping Discord push")
+        print(text)
+        return
+    manifest = read_fetch_manifest()
+    if manifest.get("trade_date") != today_cst() or manifest.get("status") != "ok":
+        raise RuntimeError(f"[gate] fetch manifest invalid: {manifest}")
+    if _session_meta(args.session).get("strict_send_requires_tradable", False) and not payload.get("short_block"):
+        raise RuntimeError(
+            f"[gate] {args.session} has zero tradable short-term signals after freshness/execution gating; refusing live push"
+        )
     maybe_send(text)
+    _persist_decision_ledger(payload)
     print(text)
 
 
