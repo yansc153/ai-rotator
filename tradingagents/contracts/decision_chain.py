@@ -93,6 +93,11 @@ class PushPayload(BaseModel):
     tradable_now: list[dict[str, Any]]
     watch_only: list[dict[str, Any]]
     rejected: list[dict[str, Any]]
+    market_state: dict[str, Any] = Field(default_factory=dict)
+    opportunity_buckets: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    danger_pool: list[dict[str, Any]] = Field(default_factory=list)
+    mapping_chain: list[dict[str, Any]] = Field(default_factory=list)
+    open_script: list[str] = Field(default_factory=list)
     freshness_manifest: list[dict[str, Any]]
     contract_version: str = CONTRACT_VERSION
 

@@ -254,6 +254,262 @@ def _fmt_price(value: Any) -> str:
         return "暂无"
 
 
+def _bucket_trade_style(item: dict[str, Any]) -> str:
+    warnings = set(item.get("warning_layer", []))
+    risk_score = float(item.get("risk_score", 0.0) or 0.0)
+    if item.get("horizon") == "bottleneck":
+        return "中线研究"
+    if item.get("push_decision") == "rejected":
+        return "回避"
+    if item.get("pool") == "ambush" or item.get("horizon") == "swing":
+        return "低吸观察"
+    if {"extended_5d", "high_atr"} & warnings or risk_score <= -6.0:
+        return "等确认"
+    if item.get("push_decision") == "tradable_now":
+        return "追强"
+    return "隔夜观察"
+
+
+def _item_reason(item: dict[str, Any]) -> str:
+    thesis = str(item.get("thesis") or item.get("why_buy") or "").strip()
+    if thesis:
+        return thesis
+    warnings = item.get("warning_layer", [])
+    if warnings:
+        return "注意 " + " / ".join(str(x) for x in warnings[:2])
+    sector = _sector_cn(item.get("sector", ""))
+    return f"{sector} 方向继续观察"
+
+
+def _bucket_line(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": item.get("symbol"),
+        "market": item.get("market"),
+        "company_name": item.get("company_name"),
+        "sector": item.get("sector"),
+        "trade_style": _bucket_trade_style(item),
+        "current_price": item.get("current_price"),
+        "ret_5d": item.get("ret_5d"),
+        "execution_score": float(item.get("execution_score", item.get("bottleneck_score", 0.0)) or 0.0),
+        "reason": _item_reason(item),
+        "pool": item.get("pool", ""),
+    }
+
+
+def _danger_reason(item: dict[str, Any]) -> str:
+    warnings = list(item.get("warning_layer", []))
+    if warnings:
+        return " / ".join(str(x) for x in warnings[:3])
+    reason_codes = list(item.get("reason_codes", []))
+    if reason_codes:
+        return " / ".join(str(x) for x in reason_codes[:3])
+    if float(item.get("ret_5d", 0.0) or 0.0) >= 0.25:
+        return "短线涨幅过大"
+    return "等待结构确认"
+
+
+def _build_mapping_chain(
+    us_rotation: dict[str, Any],
+    ah_rotation: dict[str, Any],
+    *,
+    session: str,
+) -> list[dict[str, Any]]:
+    del session
+    rows = []
+    for row in (ah_rotation.get("cross_market_signals", []) or []) + (us_rotation.get("cross_market_signals", []) or []):
+        if not isinstance(row, dict):
+            continue
+        corr = float(row.get("correlation", row.get("score", 0.0)) or 0.0)
+        best_lag = row.get("best_lag")
+        narrative = str(row.get("narrative", "")).strip()
+        if "->" in narrative:
+            driver = narrative.split("->", 1)[0].strip()
+        else:
+            driver = "海外主线"
+        rows.append(
+            {
+                "driver": driver,
+                "mapped_asset": row.get("sector") or row.get("peer_name") or row.get("symbol") or "映射链",
+                "lag": best_lag,
+                "correlation": corr,
+                "verified_event": bool(row.get("verified_event", False)),
+                "note": narrative or "等待真实交易验证",
+            }
+        )
+    rows.sort(key=lambda item: (not item["verified_event"], -abs(item["correlation"])))
+    return rows[:3]
+
+
+def _build_market_state(
+    *,
+    leaders: list[str],
+    short_block: list[dict[str, Any]],
+    coverage_watch: list[dict[str, Any]],
+    tradable_now: list[dict[str, Any]],
+    danger_pool: list[dict[str, Any]],
+) -> dict[str, Any]:
+    tradable_count = len([item for item in short_block if item.get("push_decision") == "tradable_now"])
+    unique_sectors = {item.get("sector") for item in short_block + coverage_watch if item.get("sector")}
+    avg_risk = sum(float(item.get("risk_score", 0.0) or 0.0) for item in short_block) / max(len(short_block), 1)
+    avg_ret_5d = sum(float(item.get("ret_5d", 0.0) or 0.0) for item in short_block) / max(len(short_block), 1)
+
+    if tradable_count == 0:
+        regime = "风险偏好下降"
+    elif len(unique_sectors) >= 3 and tradable_count >= 2:
+        regime = "risk-on 扩散"
+    elif avg_risk <= -5.0 or avg_ret_5d >= 0.22:
+        regime = "高位拥挤"
+    else:
+        regime = "主线抱团"
+
+    if tradable_count >= 2 and avg_risk > -4.0:
+        mainline_health = "主线健康"
+    elif tradable_count >= 1:
+        mainline_health = "主线仍在但分化"
+    else:
+        mainline_health = "主线转弱"
+
+    if len(unique_sectors) >= 3:
+        breadth = "宽度扩散"
+    elif len(short_block) <= 1:
+        breadth = "指数强、内部弱"
+    else:
+        breadth = "主线分化"
+
+    if regime == "risk-on 扩散":
+        action_bias = "优先做强，但不追最末端"
+    elif regime == "高位拥挤":
+        action_bias = "只做确认，不做情绪末端追涨"
+    elif tradable_count >= 1:
+        action_bias = "等确认后参与"
+    else:
+        action_bias = "控仓观察"
+
+    summary = (
+        f"当前更像{regime}，主线状态为{mainline_health}，宽度表现为{breadth}。"
+        f"今日有效短线机会 {tradable_count} 个，禁区池 {len(danger_pool)} 个，行动倾向：{action_bias}。"
+    )
+
+    return {
+        "regime": regime,
+        "mainline_health": mainline_health,
+        "breadth": breadth,
+        "action_bias": action_bias,
+        "leader_count": len(leaders),
+        "tradable_count": tradable_count,
+        "avg_risk_score": round(avg_risk, 2),
+        "avg_ret_5d": round(avg_ret_5d, 4),
+        "summary": summary,
+    }
+
+
+def _build_open_script(
+    *,
+    session: str,
+    short_block: list[dict[str, Any]],
+    mapping_chain: list[dict[str, Any]],
+    market_state: dict[str, Any],
+) -> list[str]:
+    leaders = [item.get("symbol") for item in short_block[:2] if item.get("symbol")]
+    if session == "evening":
+        script = [
+            f"先看美债 10Y、QQQ/SMH 期货强弱，确认今晚是 {market_state['regime']} 还是继续高位拥挤。",
+        ]
+        if leaders:
+            script.append(f"再看 {', '.join(leaders)} 开盘后是否继续强于板块，只有强者维持结构才考虑跟随。")
+        if mapping_chain:
+            script.append(f"最后看 {mapping_chain[0]['mapped_asset']} 这条映射链能否被次日 A/H 真实交易，不成立就只保留观察。")
+        return script
+
+    script = [
+        f"先看指数与核心板块是否延续 {market_state['mainline_health']}，不要在 {market_state['regime']} 状态里做相反节奏。",
+    ]
+    if leaders:
+        script.append(f"再看 {', '.join(leaders)} 是否率先弱转强或继续承接，决定今天先做追强还是等确认。")
+    if mapping_chain:
+        script.append(f"最后确认 {mapping_chain[0]['driver']} -> {mapping_chain[0]['mapped_asset']} 的映射是否成立，避免只追概念。")
+    return script
+
+
+def _build_decision_layers(
+    *,
+    us_rotation: dict[str, Any],
+    ah_rotation: dict[str, Any],
+    session: str,
+    short_block: list[dict[str, Any]],
+    coverage_watch: list[dict[str, Any]],
+    swing_block: list[dict[str, Any]],
+    bottleneck_block: list[dict[str, Any]],
+    tradable_now: list[dict[str, Any]],
+    watch_shorts: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    leaders: list[str],
+) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    rejected_sorted = sorted(
+        rejected + [item for item in short_block if {"extended_5d", "high_atr"} & set(item.get("warning_layer", []))],
+        key=lambda item: float(item.get("execution_score", 0.0) or 0.0),
+        reverse=True,
+    )
+    seen_danger: set[tuple[str, str]] = set()
+    danger_pool: list[dict[str, Any]] = []
+    for item in rejected_sorted:
+        key = (str(item.get("market", "")), str(item.get("symbol", "")))
+        if not key[0] or not key[1] or key in seen_danger:
+            continue
+        seen_danger.add(key)
+        danger_pool.append(
+            {
+                "symbol": item.get("symbol"),
+                "market": item.get("market"),
+                "company_name": item.get("company_name"),
+                "sector": item.get("sector"),
+                "reason": _danger_reason(item),
+                "trade_style": "回避",
+                "current_price": item.get("current_price"),
+                "ret_5d": item.get("ret_5d"),
+            }
+        )
+        if len(danger_pool) >= 5:
+            break
+
+    overnight_candidates = watch_shorts + coverage_watch + swing_block
+    overnight_seen: set[tuple[str, str]] = set()
+    overnight_watch: list[dict[str, Any]] = []
+    for item in overnight_candidates:
+        key = (str(item.get("market", "")), str(item.get("symbol", "")))
+        if not key[0] or not key[1] or key in overnight_seen:
+            continue
+        overnight_seen.add(key)
+        overnight_watch.append(_bucket_line(item))
+        if len(overnight_watch) >= 6:
+            break
+
+    daytrade_focus = [_bucket_line(item) for item in short_block[:5]]
+    research_focus = [_bucket_line(item) for item in bottleneck_block[:5]]
+
+    mapping_chain = _build_mapping_chain(us_rotation, ah_rotation, session=session)
+    market_state = _build_market_state(
+        leaders=leaders,
+        short_block=short_block,
+        coverage_watch=coverage_watch,
+        tradable_now=tradable_now,
+        danger_pool=danger_pool,
+    )
+    open_script = _build_open_script(
+        session=session,
+        short_block=short_block,
+        mapping_chain=mapping_chain,
+        market_state=market_state,
+    )
+    opportunity_buckets = {
+        "daytrade_focus": daytrade_focus,
+        "overnight_watch": overnight_watch,
+        "research_focus": research_focus,
+        "danger_pool": danger_pool,
+    }
+    return market_state, opportunity_buckets, danger_pool, mapping_chain, open_script
+
+
 def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, Any]:
     us = _load_rotation(date_str, "US")
     ah = _load_rotation(date_str, "AH")
@@ -377,6 +633,19 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
             break
     signal = (ah["cross_market_signals"] or us["cross_market_signals"] or [{}])[0]
     freshness_manifest = build_freshness_manifest(all_recs, session, date_str)
+    market_state, opportunity_buckets, danger_pool, mapping_chain, open_script = _build_decision_layers(
+        us_rotation=us,
+        ah_rotation=ah,
+        session=session,
+        short_block=short_block,
+        coverage_watch=coverage_watch,
+        swing_block=swing_block,
+        bottleneck_block=bottleneck_block,
+        tradable_now=tradable_shorts,
+        watch_shorts=watch_shorts,
+        rejected=rejected,
+        leaders=leaders,
+    )
     payload = {
         "run_id": str(uuid4()),
         "date": date_str,
@@ -390,6 +659,11 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
         "tradable_now": tradable_shorts,
         "watch_only": watch_shorts + watch_swings + bottleneck_block,
         "rejected": rejected,
+        "market_state": market_state,
+        "opportunity_buckets": opportunity_buckets,
+        "danger_pool": danger_pool,
+        "mapping_chain": mapping_chain,
+        "open_script": open_script,
         "freshness_manifest": freshness_manifest,
         "contract_version": CONTRACT_VERSION,
     }
@@ -561,6 +835,18 @@ def _layer_summary(item: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
+def _fmt_bucket_item(item: dict[str, Any]) -> str:
+    mkt = {"CN": "A股", "HK": "港股", "US": "美股"}.get(item.get("market"), item.get("market"))
+    sec = _sector_cn(item.get("sector", ""))
+    price = _fmt_price(item.get("current_price"))
+    ret = _fmt_pct(item.get("ret_5d"))
+    style = item.get("trade_style", "观察")
+    reason = item.get("reason", "")
+    score = item.get("execution_score")
+    score_text = f" 评分:{float(score):.0f}" if score is not None else ""
+    return f"{item.get('symbol')} [{mkt}·{sec}] {style}{score_text} | 现价 {price} | 5日 {ret} | {reason}"
+
+
 def build_brief_text(date_str: str, session: str = "morning", payload: dict[str, Any] | None = None) -> str:
     payload = payload or build_brief_payload(date_str, session)
     meta = _session_meta(session)
@@ -582,6 +868,74 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     emit_bottleneck = bool(meta.get("emit_bottleneck_block", False))
     emit_watch = bool(meta.get("emit_coverage_watch", True))
     emit_earnings = bool(meta.get("emit_earnings", True))
+
+    market_state = payload.get("market_state", {})
+    buckets = payload.get("opportunity_buckets", {})
+    if market_state:
+        lines += [
+            "",
+            "▌ 30秒决策版",
+            market_state.get("summary", "等待最新数据确认。"),
+        ]
+        if market_state.get("action_bias"):
+            lines.append(f"动作倾向：{market_state['action_bias']}")
+        if market_state.get("regime") or market_state.get("breadth") or market_state.get("mainline_health"):
+            lines.append(
+                f"市场状态：{market_state.get('regime','未知')} | 宽度：{market_state.get('breadth','未知')} | 主线：{market_state.get('mainline_health','未知')}"
+            )
+
+    daytrade_focus = buckets.get("daytrade_focus", [])
+    if daytrade_focus:
+        lines += [
+            "",
+            f"▌ 机会池｜日内优先 (共{len(daytrade_focus)}只)",
+        ]
+        for idx, item in enumerate(daytrade_focus, start=1):
+            lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+
+    overnight_watch = buckets.get("overnight_watch", [])
+    if overnight_watch:
+        lines += [
+            "",
+            f"▌ 机会池｜隔夜观察 (共{len(overnight_watch)}只)",
+        ]
+        for idx, item in enumerate(overnight_watch, start=1):
+            lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+
+    danger_pool = payload.get("danger_pool", [])
+    if danger_pool:
+        lines += [
+            "",
+            f"▌ 禁区池｜看起来强，但盈亏比差 (共{len(danger_pool)}只)",
+        ]
+        for idx, item in enumerate(danger_pool, start=1):
+            lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+
+    mapping_chain = payload.get("mapping_chain", [])
+    if mapping_chain:
+        lines += [
+            "",
+            "▌ 关键映射链",
+        ]
+        for idx, row in enumerate(mapping_chain, start=1):
+            corr = float(row.get("correlation", 0.0) or 0.0)
+            lag = row.get("lag")
+            lag_text = f"lag {lag}" if lag is not None else "lag 未知"
+            verify = "已验证" if row.get("verified_event") else "待验证"
+            lines.append(
+                f"#{idx} {row.get('driver','海外主线')} → {row.get('mapped_asset','映射资产')} | corr {corr:+.3f} | {lag_text} | {verify}"
+            )
+            if row.get("note"):
+                lines.append(f"   说明：{row['note']}")
+
+    open_script = payload.get("open_script", [])
+    if open_script:
+        lines += [
+            "",
+            "▌ 开盘脚本",
+        ]
+        for idx, step in enumerate(open_script, start=1):
+            lines.append(f"{idx}. {step}")
 
     offset = 1
     watchlist_mode = meta.get("brief_mode") == "watchlist"

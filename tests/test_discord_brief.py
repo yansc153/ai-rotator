@@ -312,6 +312,26 @@ def test_evening_renders_bottleneck_section():
     assert "失效条件" in text
 
 
+def test_evening_renders_decision_sections_and_preserves_watchlist():
+    text = _build_text_with_fixtures("2026-05-05", "evening")
+    assert "30秒决策版" in text
+    assert "机会池｜日内优先" in text
+    assert "机会池｜隔夜观察" in text
+    assert "禁区池｜看起来强，但盈亏比差" in text
+    assert "关键映射链" in text
+    assert "开盘脚本" in text
+    assert "今日优先盯盘 ticker" in text
+
+
+def test_payload_contains_decision_layers():
+    payload = _build_payload_with_fixtures("2026-05-05", "evening")
+    assert payload["market_state"]["regime"]
+    assert payload["opportunity_buckets"]["daytrade_focus"]
+    assert "danger_pool" in payload
+    assert "mapping_chain" in payload
+    assert "open_script" in payload
+
+
 def test_pick_with_diversity_market_guarantees():
     """_pick_with_diversity ensures ≥1 stock per market when capacity allows."""
     candidates = [
