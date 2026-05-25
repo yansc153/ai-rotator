@@ -12,19 +12,13 @@
         <string>ah_open</string>
     </array>
 
-    <!-- 08:45 CST, Mon–Fri. A/HK opens at 09:30. This fires 45 min early so
-         the pipeline (re-screen + rotation + Discord) lands around 09:00-09:10,
-         giving 20-30 min to review before the bell.
-         Does NOT re-fetch OHLCV — reuses the morning run's cached data. -->
-    <!-- Weekday: 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri -->
+    <!-- 08:45 local time, every day. A/HK opens at 09:30. This fires 45 min
+         early so the pipeline can land around 09:00-09:10. -->
     <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>1</integer></dict>
-        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>2</integer></dict>
-        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>3</integer></dict>
-        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>4</integer></dict>
-        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer><key>Weekday</key><integer>5</integer></dict>
-    </array>
+    <dict>
+        <key>Hour</key><integer>8</integer>
+        <key>Minute</key><integer>45</integer>
+    </dict>
 
     <key>StandardOutPath</key>
     <string>/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/launchd-ahopen.log</string>
@@ -34,13 +28,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin</string>
+        <string>/Users/oxjames/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin</string>
         <key>HOME</key>
         <string>/Users/oxjames</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>AI_ROTATOR_DB_PATH</key>
         <string>/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/storage/ai_rotator.db</string>
+        <key>AI_ROTATOR_CODEX_BIN</key>
+        <string>/Users/oxjames/.local/bin/codex</string>
     </dict>
 
     <key>RunAtLoad</key>

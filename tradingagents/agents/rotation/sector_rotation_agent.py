@@ -151,7 +151,7 @@ def _generate_llm_narratives(
     signals: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Generate Chinese-language narratives through the configured API provider."""
+    """Generate Chinese-language narratives through the local Codex CLI."""
     prompt = _build_prompt(leaders, signals, candidates)
     try:
         parsed = generate_json_object(
@@ -160,9 +160,9 @@ def _generate_llm_narratives(
             workload="deep",
         )
         if not parsed:
-            print("[WARN] LLM provider unavailable or returned empty JSON — skipping narratives")
+            print("[WARN] Codex CLI unavailable or returned empty JSON — skipping narratives")
             return {}
-        print("[INFO] LLM narratives generated via provider adapter")
+        print("[INFO] LLM narratives generated via local Codex CLI")
         return parsed
     except Exception as exc:
         print(f"[WARN] LLM narrative generation failed: {exc}")

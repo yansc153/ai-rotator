@@ -13,6 +13,7 @@ import requests  # handles SSL EOF gracefully on Python 3.14+
 
 import yaml
 from _common import PROJECT_ROOT, load_env_file
+from tradingagents.agents.rotation.bottleneck_scout import build_bottleneck_block
 from storage.sqlite import insert_decision_ledger
 from tradingagents.agents.rotation.execution_filter import (
     build_freshness_manifest,
@@ -235,6 +236,24 @@ def _pick_with_diversity(candidates: list[dict], n: int) -> list[dict]:
     return result[:n]
 
 
+def _fmt_pct(value: Any) -> str:
+    if value is None:
+        return "暂无"
+    try:
+        return f"{float(value):+.1%}"
+    except (TypeError, ValueError):
+        return "暂无"
+
+
+def _fmt_price(value: Any) -> str:
+    if value is None:
+        return "暂无"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "暂无"
+
+
 def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, Any]:
     us = _load_rotation(date_str, "US")
     ah = _load_rotation(date_str, "AH")
@@ -312,6 +331,7 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
 
     short_block_size = int(meta.get("short_block_size", 5))
     coverage_watch_size = int(meta.get("coverage_watch_size", 3))
+    bottleneck_block_size = int(meta.get("bottleneck_block_size", 0))
     if meta.get("short_block_source") == "watchlist":
         watchlist_pool = tradable_shorts + watch_shorts
         if meta.get("include_swing_in_watchlist", False):
@@ -333,6 +353,15 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
     swing_block = _pick_with_diversity(
         [item for item in watch_swings if item["symbol"] not in short_syms and item["symbol"] not in coverage_syms],
         3,
+    )
+    bottleneck_block = build_bottleneck_block(
+        (us.get("candidate_set", []) or [])
+        + (ah.get("candidate_set", []) or [])
+        + (us.get("recommendations", []) or [])
+        + (ah.get("recommendations", []) or []),
+        session=session,
+        limit=bottleneck_block_size,
+        focus_markets=focus,
     )
 
     leaders: list[str] = []
@@ -356,9 +385,10 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
         "cross_market_signal": signal,
         "short_block": short_block,
         "swing_block": swing_block,
+        "bottleneck_block": bottleneck_block,
         "coverage_watch": coverage_watch,
         "tradable_now": tradable_shorts,
-        "watch_only": watch_shorts + watch_swings,
+        "watch_only": watch_shorts + watch_swings + bottleneck_block,
         "rejected": rejected,
         "freshness_manifest": freshness_manifest,
         "contract_version": CONTRACT_VERSION,
@@ -549,6 +579,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
         lines.append(staleness)
     emit_short = bool(meta.get("emit_short_block", True))
     emit_swing = bool(meta.get("emit_swing_block", True))
+    emit_bottleneck = bool(meta.get("emit_bottleneck_block", False))
     emit_watch = bool(meta.get("emit_coverage_watch", True))
     emit_earnings = bool(meta.get("emit_earnings", True))
 
@@ -583,6 +614,38 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
                 )
                 lines.append(f"   触发：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
         offset += len(payload["short_block"])
+    if emit_bottleneck and payload.get("bottleneck_block"):
+        lines.append("")
+        lines.append(f"▌ 上游瓶颈侦察｜中长线 1-6月 (共{len(payload['bottleneck_block'])}只)")
+        lines.append("说明：这是持有型研究清单，核心是产业链不可或缺性与证据升级，不是日内追涨信号。")
+        for idx, item in enumerate(payload["bottleneck_block"], start=offset):
+            mkt = market_label.get(item["market"], item["market"])
+            sec = _sector_cn(item["sector"])
+            lines.append(
+                f"#{idx} {item['symbol']} {item['company_name']} [{mkt}·{sec}] "
+                f"评分:{float(item.get('bottleneck_score', 0.0)):.0f}  周期:{item.get('time_horizon', '3-12月')}"
+            )
+            lines.append(
+                f"   行情: 现价 {_fmt_price(item.get('current_price'))} | "
+                f"5日 {_fmt_pct(item.get('ret_5d'))} | 20日 {_fmt_pct(item.get('ret_20d'))} | "
+                f"来源:{item.get('source_pool', 'static_watchlist')}"
+            )
+            if item.get("why_buy"):
+                lines.append(f"   买它: {item['why_buy']}")
+            if item.get("hold_reason"):
+                lines.append(f"   为什么持有: {item['hold_reason']}")
+            if item.get("irreplaceable_role"):
+                lines.append(f"   不可或缺角色: {item['irreplaceable_role']}")
+            evidence = item.get("evidence", [])
+            if evidence:
+                lines.append("   证据: " + "；".join(str(x) for x in evidence[:2]))
+            triggers = item.get("watch_triggers", [])
+            if triggers:
+                lines.append("   继续观察: " + "；".join(str(x) for x in triggers[:2]))
+            invalid_if = item.get("invalid_if", [])
+            if invalid_if:
+                lines.append("   失效条件: " + "；".join(str(x) for x in invalid_if[:2]))
+        offset += len(payload["bottleneck_block"])
     if emit_swing:
         lines.append("")
         lines.append(f"▌ 中长线 1-3月 (共{len(payload['swing_block'])}只)")
@@ -679,8 +742,9 @@ def _input_artifact_hash(date_str: str) -> str:
     us_report = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-us-rotation.json"
     ah_report = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-ah-rotation.json"
     earnings = PROJECT_ROOT / "data" / "earnings_plays.json"
+    bottleneck = PROJECT_ROOT / "config" / "bottleneck_watchlist.yaml"
     session_rules = PROJECT_ROOT / "config" / "session_rules.yaml"
-    for path in (candidates, us_report, ah_report, earnings, session_rules):
+    for path in (candidates, us_report, ah_report, earnings, bottleneck, session_rules):
         if path.exists():
             digest.update(path.name.encode())
             digest.update(path.read_bytes())

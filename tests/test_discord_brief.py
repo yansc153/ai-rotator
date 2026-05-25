@@ -281,6 +281,37 @@ def test_evening_watchlist_text_uses_layers_not_entry_command():
     assert "买入 " not in text
 
 
+def test_evening_renders_bottleneck_section():
+    sample = [{
+        "symbol": "WOLF",
+        "company_name": "Wolfspeed",
+        "market": "US",
+        "sector": "碳化硅",
+        "bottleneck_score": 88.0,
+        "time_horizon": "3-12月",
+        "current_price": 69.5,
+        "ret_5d": 0.12,
+        "ret_20d": 0.40,
+        "source_pool": "day_active",
+        "why_buy": "AI机柜高压化提高SiC需求。",
+        "hold_reason": "持有到客户认证和产能利用率继续验证。",
+        "irreplaceable_role": "提供SiC材料和器件。",
+        "evidence": ["Serenity点名", "本地候选池出现"],
+        "watch_triggers": ["800VDC继续被验证"],
+        "invalid_if": ["融资风险压过需求"],
+    }]
+    with patch("send_discord_brief._load_rotation", side_effect=_fake_load_rotation), \
+         patch("send_discord_brief._load_earnings_plays", return_value=[]), \
+         patch("send_discord_brief._data_staleness_note", return_value=""), \
+         patch("send_discord_brief.build_bottleneck_block", return_value=sample):
+        text = build_brief_text("2026-05-05", "evening")
+
+    assert "上游瓶颈侦察" in text
+    assert "为什么持有" in text
+    assert "不可或缺角色" in text
+    assert "失效条件" in text
+
+
 def test_pick_with_diversity_market_guarantees():
     """_pick_with_diversity ensures ≥1 stock per market when capacity allows."""
     candidates = [

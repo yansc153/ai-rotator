@@ -1,0 +1,257 @@
+themes:
+  - theme_id: ai_power_800vdc
+    theme: "AI电源架构升级 / 800VDC"
+    bottleneck_cn: "高压功率半导体瓶颈"
+    constraint: "GPU机柜功率密度继续上升，供电架构从低压大电流向更高电压、更高效率迁移。"
+    scarcity: high
+    time_horizon: "3-12月"
+    watch_triggers:
+      - "NVDA、hyperscaler 或电源设备厂商继续提到 800VDC / high-voltage rack power"
+      - "GaN/SiC 公司出现 design win、capacity ramp、customer qualification"
+      - "数据中心电力链从 VRT/ETN/PWR 扩散到上游功率器件"
+    invalid_if:
+      - "800VDC 迁移被明确推迟，或者主流机柜继续停留在既有低压架构"
+      - "公司融资压力、债务重组或产能问题压过产业链需求"
+    symbols:
+      - symbol: "WOLF"
+        market: "US"
+        company_name: "Wolfspeed"
+        sector: "碳化硅"
+        chain_role: "SiC wafer / device 供给端"
+        constraint: "AI电源升级需要更高效率功率器件，SiC 是高压高功率场景的重要材料路线。"
+        why_buy: "它是高 beta 的 SiC 供给端标的，一旦市场从 GPU 财报映射到 800VDC / 电源架构升级，资金会寻找上游材料和器件弹性。"
+        hold_reason: "只要高压电源迁移、客户认证和产能利用率继续改善，它的价值来自产业瓶颈被重新定价，而不是单日涨跌。"
+        irreplaceable_role: "在高压功率转换中提供 SiC 材料和器件弹性，是 AI 电力链从设备端向材料端扩散时的稀缺节点。"
+        conviction: 74
+        evidence:
+          - "Serenity 最新讨论将 800VDC power semi 与 NVTS/WOLF 放在同一条潜在 10x 线索中。"
+          - "本地候选池已出现 WOLF，说明价格/动量层也开始捕捉这条线。"
+        watch_triggers:
+          - "WOLF 出现客户认证、资产出售、融资缓解或产能利用率改善"
+          - "AI 电源链强势时，WOLF 相对 VRT/ETN/MPWR 开始补涨"
+        invalid_if:
+          - "破产/重组风险上升且无法被产业订单验证抵消"
+          - "SiC 在数据中心高压电源里的采用证据变弱"
+      - symbol: "NVTS"
+        market: "US"
+        company_name: "Navitas Semiconductor"
+        sector: "GaN功率半导体"
+        chain_role: "GaN power IC / fast charger to AI power migration"
+        constraint: "AI机柜效率提升需要更高频、更高效率的功率转换方案。"
+        why_buy: "如果 800VDC 主题扩散到 GaN 路线，NVTS 是更小市值、更高弹性的上游器件候选。"
+        hold_reason: "持有逻辑依赖 design win、客户认证和 AI/data center 业务占比提升，而不是消费快充旧故事。"
+        irreplaceable_role: "提供 GaN 功率 IC 路线，是高压高效率电源转换的潜在替代或补充路径。"
+        conviction: 68
+        evidence:
+          - "Serenity 在 800VDC power semi 讨论中点名 NVTS 作为类似高 beta 线索。"
+          - "本地 universe_full 已覆盖 NVTS，可进入后续行情筛选。"
+        watch_triggers:
+          - "管理层明确 AI data center / 800VDC 相关客户进展"
+          - "股价从亏损小盘属性转向订单验证属性"
+        invalid_if:
+          - "AI/data center 进展长期停留在概念表述"
+          - "融资稀释或现金流风险明显扩大"
+
+  - theme_id: ai_optical_cpo_inp
+    theme: "AI光互连 / CPO / InP"
+    bottleneck_cn: "高速光互连上游瓶颈"
+    constraint: "GPU集群规模扩张后，带宽、功耗和延迟把瓶颈从算力芯片推向光模块、CW laser、InP substrate 和硅光封装。"
+    scarcity: very_high
+    time_horizon: "3-12月"
+    watch_triggers:
+      - "1.6T / 3.2T / CPO / LPO / LRO 被更多云厂商、交换芯片厂商或光模块厂商验证"
+      - "InP substrate、CW laser、laser array、硅光封装出现 backlog 或产能锁定"
+      - "NVDA/AVGO/MRVL/ANET 财报把增长压力传导到光互连供应链"
+    invalid_if:
+      - "光互连升级被推迟，或者需求集中在大市值龙头、上游小票无法获得订单"
+      - "客户验证失败或关键产能扩张无法交付"
+    symbols:
+      - symbol: "SIVE"
+        market: "US"
+        company_name: "Sivers Semiconductors"
+        sector: "CW laser / silicon photonics"
+        chain_role: "CW laser source for 1.6T+ optical modules"
+        constraint: "CPO/硅光路线需要更高效率、更可靠的连续波激光源。"
+        why_buy: "它代表 Serenity 式的小市值上游瓶颈：不是卖最终模块，而是卡在高阶光模块的激光源供给。"
+        hold_reason: "持有理由来自 Jabil、MRVL、O-Net 等生态验证是否继续推进，一旦 1.6T/3.2T 放量，市场会重新定价 CW laser 的战略位置。"
+        irreplaceable_role: "给高速光互连提供激光源，是硅光/CPO 方案从实验室走向量产时必须解决的节点。"
+        conviction: 82
+        evidence:
+          - "Sivers 官方公告与 Jabil 合作开发 1.6T LRO 光收发模块。"
+          - "Serenity 公开框架将 SIVE 视为 CW laser chokepoint。"
+        watch_triggers:
+          - "Jabil 合作进入 sampling、qualification 或 volume production"
+          - "MRVL/AVGO/ANET 财报继续强化 1.6T/CPO 需求"
+        invalid_if:
+          - "Jabil 或核心客户验证停滞"
+          - "CW laser 路线被更强替代方案绕开"
+      - symbol: "AXTI"
+        market: "US"
+        company_name: "AXT"
+        sector: "InP substrate"
+        chain_role: "Indium phosphide substrate upstream supplier"
+        constraint: "InP substrate 是高速光器件和硅光供应链上游材料瓶颈。"
+        why_buy: "如果 AI 光互连需求继续推高 InP 用量，AXTI 的价值来自上游材料稀缺，而不是传统周期反弹。"
+        hold_reason: "持有理由是 InP backlog、data center demand 和客户拉货持续被财报验证。"
+        irreplaceable_role: "提供 InP substrate，是光器件扩产前必须先解决的材料供给。"
+        conviction: 80
+        evidence:
+          - "Serenity 2025 年已把 AXTI/SMTOY 定义为 InP substrate 瓶颈线索。"
+          - "AXT 官方 2025 Q3 业绩提到 data center 应用推动 InP revenue sequentially 增长超过 250%。"
+        watch_triggers:
+          - "InP revenue、backlog 或 data center customer commentary 连续验证"
+          - "光通信链强势时 AXTI 相对 LITE/COHR 补涨"
+        invalid_if:
+          - "InP 增长回落到一次性拉货"
+          - "产能/价格压力导致收入增长不能转化为毛利改善"
+      - symbol: "LITE"
+        market: "US"
+        company_name: "Lumentum"
+        sector: "光通信"
+        chain_role: "Optical components / lasers"
+        constraint: "高速光模块升级提高激光器与光器件要求。"
+        why_buy: "当市场从 GPU 扩散到光通信时，LITE 是流动性更好的上游验证标的。"
+        hold_reason: "只要光模块需求、客户订单和利润率修复同步改善，它可作为 CPO/InP/SIVE 小票的流动性锚。"
+        irreplaceable_role: "连接光器件供给与光模块放量，是高阶互连链条中的核心组件厂。"
+        conviction: 70
+        evidence:
+          - "本地 universe_full 已覆盖 LITE，并归入光通信主题。"
+        watch_triggers:
+          - "光通信龙头财报或评级上修"
+          - "LITE/COHR/AAOI 同步走强"
+        invalid_if:
+          - "光通信强度只停留在短线挤空，没有订单或指引验证"
+      - symbol: "COHR"
+        market: "US"
+        company_name: "Coherent"
+        sector: "光通信"
+        chain_role: "Optical materials and components"
+        constraint: "AI 互连升级需要高端光器件、材料和制造能力。"
+        why_buy: "COHR 是光互连扩散行情里的大中盘确认器，可用于判断小票瓶颈线索是否进入主流资金视野。"
+        hold_reason: "持有逻辑来自订单、毛利率和 AI datacom exposure 的持续验证。"
+        irreplaceable_role: "提供光学材料、器件和模块能力，是光通信产业链从材料到组件的重要节点。"
+        conviction: 69
+        evidence:
+          - "本地 universe_full 已覆盖 COHR，并归入光通信主题。"
+        watch_triggers:
+          - "COHR 财报或指引明确 AI datacom 拉动"
+          - "COHR 强于 QQQ/SMH 且带动 LITE/AAOI"
+        invalid_if:
+          - "AI datacom 订单无法抵消其他业务拖累"
+      - symbol: "300308.SZ"
+        market: "CN"
+        company_name: "中际旭创"
+        sector: "光模块"
+        chain_role: "800G/1.6T optical module leader"
+        constraint: "国内光模块龙头承担海外 AI 光互连需求映射。"
+        why_buy: "它是 A股 AI 光模块主线的流动性锚，适合用来确认海外 CPO/光互连叙事是否传导到 A股。"
+        hold_reason: "只要海外 capex、光模块订单和业绩兑现继续，A股资金会把它作为主线确认器。"
+        irreplaceable_role: "在 A股链条中代表高阶光模块供给，是海外 AI 光互连需求的核心映射。"
+        conviction: 73
+        evidence:
+          - "本地 universe.yaml 将中际旭创列为 optical_modules_400g_800g leader。"
+        watch_triggers:
+          - "美股光通信走强后 A股光模块次日继续领涨"
+          - "业绩预告或订单新闻确认高阶模块放量"
+        invalid_if:
+          - "高阶光模块订单预期被业绩证伪"
+      - symbol: "300502.SZ"
+        market: "CN"
+        company_name: "新易盛"
+        sector: "光模块"
+        chain_role: "High-speed optical module supplier"
+        constraint: "光互连需求扩散时，A股高弹性光模块供应商会承接资金轮动。"
+        why_buy: "它比龙头更有弹性，适合作为 A股光模块瓶颈链条的 beta 放大器。"
+        hold_reason: "持有理由是海外订单、产品代际升级和板块宽度继续扩散。"
+        irreplaceable_role: "提供高速光模块，是 AI 集群互连从美股叙事映射到 A股的核心节点。"
+        conviction: 70
+        evidence:
+          - "本地 universe.yaml 将新易盛列为 optical_modules_400g_800g leader。"
+        watch_triggers:
+          - "中际旭创强势后，新易盛继续补涨或领涨"
+          - "A股光模块成交额扩张"
+        invalid_if:
+          - "光模块板块高位放量滞涨且订单预期未继续上修"
+
+  - theme_id: ai_datacenter_power
+    theme: "AI数据中心电力基础设施"
+    bottleneck_cn: "电力与机房基础设施瓶颈"
+    constraint: "GPU部署从芯片供给转向电力、液冷、电网连接和机房工程约束。"
+    scarcity: high
+    time_horizon: "2-9月"
+    watch_triggers:
+      - "hyperscaler capex 上修并明确电力、液冷、变压器、电网连接限制"
+      - "VRT/ETN/PWR/GEV 同步强于 QQQ/SMH"
+      - "AI 数据中心项目拿到电力合同、核电/PPA 或大型工程订单"
+    invalid_if:
+      - "AI capex 放缓，或数据中心建设瓶颈从电力转向需求不足"
+      - "政策、融资或电网审批导致项目延后"
+    symbols:
+      - symbol: "VRT"
+        market: "US"
+        company_name: "Vertiv"
+        sector: "数据中心电源/液冷"
+        chain_role: "Power and thermal infrastructure"
+        constraint: "高密度 AI 机柜需要电源、热管理和机房基础设施同步升级。"
+        why_buy: "VRT 是 AI 数据中心从 GPU 到物理基础设施扩散时最直接的确认标的。"
+        hold_reason: "只要订单、backlog 和 margin 继续验证，它代表 AI capex 的非芯片受益方向。"
+        irreplaceable_role: "提供电源与热管理基础设施，是 AI 机房落地的执行层。"
+        conviction: 76
+        evidence:
+          - "本地 universe_full 已覆盖 VRT，并归入数据中心电源/液冷。"
+        watch_triggers:
+          - "VRT 财报 backlog/order 强于预期"
+          - "VRT 强于 SMH 且带动 ETN/PWR"
+        invalid_if:
+          - "订单增长放缓或利润率开始反转"
+      - symbol: "ETN"
+        market: "US"
+        company_name: "Eaton"
+        sector: "电气/数据中心"
+        chain_role: "Electrical equipment and power distribution"
+        constraint: "数据中心并网和配电设备成为 AI capex 的交付瓶颈。"
+        why_buy: "ETN 是电气设备链的高质量确认器，用来判断 AI 电力主线是否仍在机构资金主线里。"
+        hold_reason: "持有理由来自电气 backlog、数据中心订单和工业电气景气延续。"
+        irreplaceable_role: "提供配电、电气设备和电力管理，是 AI 数据中心从图纸到交付的关键节点。"
+        conviction: 72
+        evidence:
+          - "本地 universe_full 已覆盖 ETN，并归入电气/数据中心。"
+        watch_triggers:
+          - "电气设备板块跑赢半导体"
+          - "ETN/PWR/GEV 同步创新高"
+        invalid_if:
+          - "电气设备订单放缓或估值过热后出现指引下修"
+      - symbol: "PWR"
+        market: "US"
+        company_name: "Quanta Services"
+        sector: "电力工程"
+        chain_role: "Grid construction and power engineering"
+        constraint: "AI 数据中心需要电网连接、输配电和工程交付能力。"
+        why_buy: "PWR 是电力工程瓶颈的执行端标的，适合判断 AI capex 是否进入电网建设层。"
+        hold_reason: "只要 grid modernization 和 data center 工程 backlog 增长，它的逻辑不是短线题材，而是长期 capex 执行。"
+        irreplaceable_role: "把电力需求转化成可交付工程，是 AI 数据中心建设的基础设施施工节点。"
+        conviction: 71
+        evidence:
+          - "本地 universe_full 已覆盖 PWR，并归入电力工程。"
+        watch_triggers:
+          - "PWR backlog、订单或大型电网项目继续提升"
+          - "电力工程强于公用事业和半导体"
+        invalid_if:
+          - "工程执行成本或政策审批拖累订单兑现"
+      - symbol: "GEV"
+        market: "US"
+        company_name: "GE Vernova"
+        sector: "AI电力设备"
+        chain_role: "Grid, turbine and electrification equipment"
+        constraint: "AI 数据中心电力需求推高电网设备、发电和电气化资产价值。"
+        why_buy: "GEV 是 AI 电力主线从设备到电网的机构锚，适合观察电力瓶颈是否仍被市场重估。"
+        hold_reason: "只要电网设备和电气化订单继续上修，它能承接 AI capex 外溢。"
+        irreplaceable_role: "覆盖电网与发电设备，是 AI 电力链条的上游供给节点。"
+        conviction: 70
+        evidence:
+          - "本地 universe_full 已覆盖 GEV，并归入 AI电力设备。"
+        watch_triggers:
+          - "GEV 与 VRT/ETN 同步强势"
+          - "电网设备订单和 margin 继续改善"
+        invalid_if:
+          - "能源设备周期转弱或 AI 电力叙事降温"

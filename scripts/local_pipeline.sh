@@ -6,11 +6,8 @@
 #   ./scripts/local_pipeline.sh midday     # 12:30 — re-screen + 盘中播报
 #   ./scripts/local_pipeline.sh evening    # 20:30 — US prep watchlist + Discord push
 #
-# This script is the single runtime entrypoint for both local launchd runs
-# and Linux VPS runs (for example via systemd timers + Docker).
-#
-# LLM enrichment is provider-based now. Configure it via environment variables
-# / .env rather than relying on a locally authenticated CLI session.
+# This script is the local runtime entrypoint for launchd-based scheduling.
+# LLM enrichment is expected to use the locally logged-in Codex CLI session.
 
 set -euo pipefail
 

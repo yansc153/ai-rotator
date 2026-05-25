@@ -5,7 +5,7 @@
 #   ./launchd/install.sh          # install all 4 agents
 #   ./launchd/install.sh uninstall # remove all 4 agents
 #
-# Schedule (all CST / local timezone, Mon–Fri):
+# Schedule (all local timezone, every day):
 #   06:24 — morning   全量OHLCV刷新 + 盘前早报 (到 07:00 左右发出)
 #   08:45 — ah_open   A股开盘精选盯盘清单 (到 09:00-09:10 发出, 09:30 开盘前)
 #   12:30 — midday    A/H 午盘可执行信号
@@ -66,10 +66,10 @@ done
 
 echo ""
 echo "Schedule:"
-echo "  06:24 CST Mon–Fri → morning  (全量OHLCV刷新 → 盘前早报 ~07:00)"
-echo "  08:45 CST Mon–Fri → ah_open  (A股开盘精选盯盘清单 ~09:00-09:10)"
-echo "  12:30 CST Mon–Fri → midday   (A/H 午盘可执行信号)"
-echo "  20:30 CST Mon–Fri → evening  (AI短线精灵美股盯盘清单)"
+echo "  06:24 daily → morning  (全量OHLCV刷新 → 盘前早报 ~07:00)"
+echo "  08:45 daily → ah_open  (A股开盘精选盯盘清单 ~09:00-09:10)"
+echo "  12:30 daily → midday   (A/H 午盘可执行信号)"
+echo "  20:30 daily → evening  (AI短线精灵美股盯盘清单)"
 echo ""
 echo "Logs: $REPO_DIR/logs/launchd-{morning,ahopen,midday,evening}.log"
 echo ""

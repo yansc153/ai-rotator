@@ -88,6 +88,7 @@ class PushPayload(BaseModel):
     cross_market_signal: dict[str, Any]
     short_block: list[dict[str, Any]]
     swing_block: list[dict[str, Any]]
+    bottleneck_block: list[dict[str, Any]] = Field(default_factory=list)
     coverage_watch: list[dict[str, Any]]
     tradable_now: list[dict[str, Any]]
     watch_only: list[dict[str, Any]]

@@ -12,15 +12,12 @@
         <string>midday</string>
     </array>
 
-    <!-- 12:30 CST, Mon–Fri — A/H market lunch break -->
+    <!-- 12:30 local time, every day -->
     <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>1</integer></dict>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>2</integer></dict>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>3</integer></dict>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>4</integer></dict>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>5</integer></dict>
-    </array>
+    <dict>
+        <key>Hour</key><integer>12</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
 
     <key>StandardOutPath</key>
     <string>/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/logs/launchd-midday.log</string>
@@ -30,13 +27,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin</string>
+        <string>/Users/oxjames/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin</string>
         <key>HOME</key>
         <string>/Users/oxjames</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>AI_ROTATOR_DB_PATH</key>
         <string>/Users/oxjames/Downloads/CC_testing/股票扫描器/ai-rotator/storage/ai_rotator.db</string>
+        <key>AI_ROTATOR_CODEX_BIN</key>
+        <string>/Users/oxjames/.local/bin/codex</string>
     </dict>
 
     <key>RunAtLoad</key>

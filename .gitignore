@@ -8,6 +8,7 @@ storage/ai_rotator.db
 .env
 __pycache__/
 *.pyc
+*.egg-info/
 .DS_Store
 skills-lock.json
 

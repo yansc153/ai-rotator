@@ -1,7 +1,7 @@
 """
 Tests for sector_rotation_agent — focused on fixes from May 2026 audit:
   - _parse_llm_json bare JSONDecodeError (was uncaught)
-  - LLM narrative graceful degradation (provider unavailable / failure)
+  - LLM narrative graceful degradation (local Codex CLI unavailable / failure)
 """
 from __future__ import annotations
 
@@ -49,8 +49,8 @@ def test_parse_llm_json_empty_string_returns_empty():
 
 # ─── _generate_llm_narratives graceful degradation ─────────────────────────
 
-def test_generate_llm_narratives_provider_unavailable():
-    """If no provider config is available, returns {} without raising."""
+def test_generate_llm_narratives_codex_unavailable():
+    """If local Codex CLI yields no JSON, returns {} without raising."""
     with patch(
         "tradingagents.agents.rotation.sector_rotation_agent.generate_json_object",
         return_value={},
@@ -59,8 +59,8 @@ def test_generate_llm_narratives_provider_unavailable():
     assert result == {}
 
 
-def test_generate_llm_narratives_provider_exception():
-    """Provider exception returns {} without propagating."""
+def test_generate_llm_narratives_codex_exception():
+    """Codex exception returns {} without propagating."""
     with patch(
         "tradingagents.agents.rotation.sector_rotation_agent.generate_json_object",
         side_effect=RuntimeError("boom"),
@@ -70,7 +70,7 @@ def test_generate_llm_narratives_provider_exception():
 
 
 def test_generate_llm_narratives_parsed_json():
-    """Provider JSON should flow through unchanged."""
+    """Codex JSON should flow through unchanged."""
     payload = {"sector_narratives": {"gpu": "AI领涨"}, "cross_signal_narrative": "", "stock_theses": {}}
     with patch(
         "tradingagents.agents.rotation.sector_rotation_agent.generate_json_object",
