@@ -149,6 +149,8 @@ def classify_candidate(
     reason_codes: list[str] = []
     invalid_if: list[str] = []
     push_decision = "tradable_now"
+    three_locks = item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {}
+    three_locks_status = str(three_locks.get("status", "insufficient_history"))
 
     if focus is not None and item.get("market") not in focus:
         push_decision = "rejected"
@@ -160,7 +162,8 @@ def classify_candidate(
             push_decision = "watch_only"
             reason_codes.append("not_in_active_sector")
 
-    if push_decision == "tradable_now" and horizon == "short" and meta.get("require_fresh_intraday", False):
+    intraday_required = bool(meta.get("require_fresh_intraday", False)) or float(meta.get("intraday_weight", 0.0) or 0.0) > 0
+    if push_decision == "tradable_now" and horizon == "short" and intraday_required:
         if freshness.intraday_status != "fresh":
             push_decision = "watch_only"
             reason_codes.append(f"intraday_{freshness.intraday_status}")
@@ -177,7 +180,7 @@ def classify_candidate(
         push_decision = "rejected"
         reason_codes.append("session_score_negative")
 
-    if push_decision == "tradable_now" and _uses_us_catalyst_gate(session, item):
+    if push_decision != "rejected" and _uses_us_catalyst_gate(session, item):
         if c_status == "data_limited":
             push_decision = "watch_only"
             reason_codes.append("catalyst_data_limited")
@@ -191,12 +194,27 @@ def classify_candidate(
         push_decision = "watch_only"
         reason_codes.append("swing_watch_only")
 
+    warnings = set(item.get("warning_layer", []) or [])
+    if push_decision == "tradable_now" and "high_atr" in warnings:
+        push_decision = "watch_only"
+        reason_codes.append("high_atr_watch_only")
+
+    if push_decision == "tradable_now" and three_locks_status == "invalid":
+        push_decision = "watch_only"
+        reason_codes.append("three_locks_invalid")
+
     if active_sector:
         invalid_if.append("sector_leader_breaks")
     if freshness.intraday_status != "fresh":
         invalid_if.append(f"intraday_{freshness.intraday_status}")
     if c_status in {"stale", "absent", "data_limited"} and _uses_us_catalyst_gate(session, item):
         invalid_if.append(f"catalyst_{c_status}")
+    if "high_atr" in warnings:
+        invalid_if.append("high_atr")
+    if three_locks_status == "invalid":
+        invalid_if.append("three_locks_invalid")
+    if three_locks.get("breakdown_support"):
+        invalid_if.append("three_locks_support_break")
 
     score = session_score
     if active_sector:
@@ -205,6 +223,12 @@ def classify_candidate(
         score += 5.0
     if c_status == "fresh":
         score += 8.0
+    if three_locks_status == "triple_lock":
+        score += 12.0
+    elif three_locks_status == "double_lock":
+        score += 6.0
+    elif three_locks_status == "invalid":
+        score -= 10.0
     if push_decision == "watch_only":
         score -= 15.0
     if push_decision == "rejected":

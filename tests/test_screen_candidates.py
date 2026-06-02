@@ -53,3 +53,20 @@ def test_safe_text_falls_back_on_nan():
     assert sc._safe_text(float("nan"), "POET") == "POET"
     assert sc._safe_text("", "POET") == "POET"
     assert sc._safe_text("  ", "POET") == "POET"
+
+
+def test_allowed_latest_dates_prefers_manifest_market_dates():
+    manifest = {
+        "coverage": {
+            "CN": {"accepted_dates": ["2026-05-25", "2026-05-22"]},
+            "US": {"accepted_dates": ["2026-05-22"]},
+        }
+    }
+
+    assert sc._allowed_latest_dates("CN", manifest) == {"2026-05-25", "2026-05-22"}
+    assert sc._allowed_latest_dates("US", manifest) == {"2026-05-22"}
+
+
+def test_allowed_latest_dates_falls_back_without_manifest():
+    dates = sc._allowed_latest_dates("US", None)
+    assert len(dates) == 2

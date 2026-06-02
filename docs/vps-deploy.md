@@ -5,7 +5,8 @@
 - Linux VPS host owns the schedule through `systemd timers`
 - Runtime executes inside Docker through `docker compose run`
 - Runtime state persists on the host under `data/`, `storage/`, `reports/`, `logs/`
-- LLM enrichment uses API providers, not a local CLI session
+- LLM enrichment is optional and uses API providers, not a local CLI session
+- The deterministic product path is daily fetch → candidate pool → three-lock technical confirmation → execution filter → Discord push. It does not require an LLM.
 
 ## 1. Pull and build
 
@@ -20,11 +21,21 @@ Copy `.env.example` to `.env`, then set:
 
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_CHANNEL_ID`
-- one of:
+- Optional LLM narrative key, if you want stronger sector/stock explanations:
   - `OPENAI_API_KEY`
   - `ANTHROPIC_API_KEY`
   - `DEEPSEEK_API_KEY`
   - `GLM_API_KEY`
+
+For the lowest-friction VPS setup, set:
+
+```bash
+AI_ROTATOR_LLM_PROVIDER=deepseek
+AI_ROTATOR_LLM_MODEL=deepseek-chat
+DEEPSEEK_API_KEY=...
+```
+
+If no LLM key is configured, the scanner still runs and sends Discord briefs; only the narrative enrichment is skipped.
 
 Optional overrides:
 

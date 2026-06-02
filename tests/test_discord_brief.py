@@ -26,6 +26,7 @@ def _fake_rotation_payloads() -> dict[str, dict]:
         "horizon": "short",
         "rotation_score": 90.0,
         "priority_score": 90.0,
+        "three_locks": {"status": "triple_lock", "score": 92.0, "support_level": 880.0, "pressure_level": 930.0, "reason": "红K + 站上操盘线"},
         "ret_5d": 0.10,
         "current_price": 900.0,
         "market_cap": 2500.0,
@@ -41,6 +42,7 @@ def _fake_rotation_payloads() -> dict[str, dict]:
         "horizon": "short",
         "rotation_score": 84.0,
         "priority_score": 84.0,
+        "three_locks": {"status": "double_lock", "score": 66.0, "support_level": 116.0, "pressure_level": 125.0, "reason": "红K + 站上黄金线"},
         "ret_5d": 0.08,
         "current_price": 120.0,
         "market_cap": 50.0,
@@ -56,6 +58,7 @@ def _fake_rotation_payloads() -> dict[str, dict]:
         "horizon": "short",
         "rotation_score": 78.0,
         "priority_score": 78.0,
+        "three_locks": {"status": "single_lock", "score": 36.0, "support_level": 1.68, "pressure_level": 1.90, "reason": "红K"},
         "ret_5d": 0.06,
         "current_price": 1.8,
         "market_cap": 10.0,
@@ -71,6 +74,7 @@ def _fake_rotation_payloads() -> dict[str, dict]:
         "horizon": "swing",
         "rotation_score": 65.0,
         "priority_score": 65.0,
+        "three_locks": {"status": "invalid", "score": 12.0, "support_level": 150.0, "pressure_level": 172.0, "reason": "蓝K"},
         "ret_5d": 0.04,
         "current_price": 160.0,
         "market_cap": 250.0,
@@ -86,6 +90,7 @@ def _fake_rotation_payloads() -> dict[str, dict]:
         "horizon": "swing",
         "rotation_score": 62.0,
         "priority_score": 62.0,
+        "three_locks": {"status": "invalid", "score": 10.0, "support_level": 9.2, "pressure_level": 11.2, "reason": "跌破支撑"},
         "ret_5d": 0.03,
         "current_price": 10.0,
         "market_cap": 5.0,
@@ -208,6 +213,17 @@ def test_pick_with_diversity_handles_missing_rotation_score():
     assert all(r["symbol"] in {"A", "B", "C"} for r in result)
 
 
+def test_pick_with_diversity_prefers_final_execution_score():
+    candidates = [
+        {"symbol": "EARLY", "market": "US", "execution_score": 10, "shortline_priority_score": 99},
+        {"symbol": "FINAL", "market": "US", "execution_score": 80, "shortline_priority_score": 20},
+    ]
+
+    result = _pick_with_diversity(candidates, 1)
+
+    assert result[0]["symbol"] == "FINAL"
+
+
 # ─── session-aware scoring ────────────────────────────────────────────────
 
 def test_session_score_excludes_extremely_overbought():
@@ -244,7 +260,7 @@ def test_build_brief_text_sessions_have_different_headers():
     assert "盘前早报" in m
     assert "A股午盘信号" in d
     assert "AI赛道短线精灵" in e
-    assert "今日优先盯盘 ticker" in e
+    assert "美股专区" in e
 
 
 def test_midday_excludes_us_stocks():
@@ -274,53 +290,72 @@ def test_evening_watchlist_can_surface_catalyst_limited_us_names():
     assert "catalyst_data_limited" in nvda["reason_codes"]
 
 
+def test_evening_watchlist_fills_from_candidate_set_to_five():
+    payloads = _fake_rotation_payloads()
+    extra_candidates = []
+    for idx in range(1, 6):
+        extra_candidates.append(
+            {
+                "symbol": f"USAI{idx}",
+                "company_name": f"US AI {idx}",
+                "market": "US",
+                "sector": "GPU",
+                "pool": "day_active",
+                "rotation_score": 80.0 - idx,
+                "priority_score": 80.0 - idx,
+                "ret_5d": 0.05,
+                "current_price": 20.0 + idx,
+                "market_cap": 10.0,
+                "atr_pct": 0.03,
+                "active_sector": True,
+                "rank_in_sector": idx + 1,
+                "thesis": "US AI watchlist fill",
+            }
+        )
+    payloads["US"]["candidate_set"] = payloads["US"]["candidate_set"] + extra_candidates
+    payloads["US"]["recommendations"] = [payloads["US"]["recommendations"][0]]
+
+    def fake_load_rotation(date_str: str, market: str) -> dict:
+        del date_str
+        return payloads[market]
+
+    with patch("send_discord_brief._load_rotation", side_effect=fake_load_rotation), \
+         patch("send_discord_brief._earnings_payload_status", return_value=({}, "absent")):
+        payload = build_brief_payload("2026-05-05", "evening")
+
+    assert len(payload["short_block"]) == 5
+    assert any(item["symbol"].startswith("USAI") for item in payload["short_block"])
+
+
 def test_evening_watchlist_text_uses_layers_not_entry_command():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "说明：这是开盘前盯盘清单" in text
-    assert "加权：" in text
+    assert "美股专区" in text
+    assert "结构：" in text
     assert "买入 " not in text
 
 
-def test_evening_renders_bottleneck_section():
-    sample = [{
-        "symbol": "WOLF",
-        "company_name": "Wolfspeed",
-        "market": "US",
-        "sector": "碳化硅",
-        "bottleneck_score": 88.0,
-        "time_horizon": "3-12月",
-        "current_price": 69.5,
-        "ret_5d": 0.12,
-        "ret_20d": 0.40,
-        "source_pool": "day_active",
-        "why_buy": "AI机柜高压化提高SiC需求。",
-        "hold_reason": "持有到客户认证和产能利用率继续验证。",
-        "irreplaceable_role": "提供SiC材料和器件。",
-        "evidence": ["Serenity点名", "本地候选池出现"],
-        "watch_triggers": ["800VDC继续被验证"],
-        "invalid_if": ["融资风险压过需求"],
-    }]
+def test_evening_omits_bottleneck_from_payload_and_text():
     with patch("send_discord_brief._load_rotation", side_effect=_fake_load_rotation), \
          patch("send_discord_brief._load_earnings_plays", return_value=[]), \
-         patch("send_discord_brief._data_staleness_note", return_value=""), \
-         patch("send_discord_brief.build_bottleneck_block", return_value=sample):
-        text = build_brief_text("2026-05-05", "evening")
+         patch("send_discord_brief._data_staleness_note", return_value=""):
+        payload = build_brief_payload("2026-05-05", "evening")
+        text = build_brief_text("2026-05-05", "evening", payload=payload)
 
-    assert "上游瓶颈侦察" in text
-    assert "为什么持有" in text
-    assert "不可或缺角色" in text
-    assert "失效条件" in text
+    assert payload["bottleneck_block"] == []
+    assert all(item.get("horizon") != "bottleneck" for item in payload["watch_only"])
+    assert "上游瓶颈侦察" not in text
 
 
 def test_evening_renders_decision_sections_and_preserves_watchlist():
     text = _build_text_with_fixtures("2026-05-05", "evening")
     assert "30秒决策版" in text
-    assert "机会池｜日内优先" in text
-    assert "机会池｜隔夜观察" in text
+    assert "美股专区" in text
+    assert "港股专区" in text
+    assert "A股专区" in text
     assert "禁区池｜看起来强，但盈亏比差" in text
     assert "关键映射链" in text
     assert "开盘脚本" in text
-    assert "今日优先盯盘 ticker" in text
+    assert "三把锁：" in text
 
 
 def test_payload_contains_decision_layers():
@@ -330,6 +365,9 @@ def test_payload_contains_decision_layers():
     assert "danger_pool" in payload
     assert "mapping_chain" in payload
     assert "open_script" in payload
+    assert payload["market_sections"]["US"]["label"] == "美股专区"
+    assert payload["market_sections"]["HK"]["label"] == "港股专区"
+    assert payload["market_sections"]["CN"]["label"] == "A股专区"
 
 
 def test_pick_with_diversity_market_guarantees():
@@ -386,8 +424,35 @@ def test_brief_renders_market_coverage_watchlist():
 
 def test_morning_now_renders_short_and_swing_blocks():
     text = _build_text_with_fixtures("2026-05-05", "morning")
-    assert "短线 1-2天" in text
-    assert "中长线 1-3月" in text
+    assert "美股专区" in text
+    assert "港股专区" in text
+    assert "A股专区" in text
+
+
+def test_market_sections_show_scope_reference_in_evening():
+    text = _build_text_with_fixtures("2026-05-05", "evening")
+
+    assert "A股专区" in text
+    assert "688256.SH" in text
+    assert "[参考]" in text
+
+
+def test_market_sections_surface_high_atr_as_observation():
+    payloads = _fake_rotation_payloads()
+    payloads["US"]["candidate_set"][0]["atr_pct"] = 0.10
+    payloads["US"]["recommendations"][0]["atr_pct"] = 0.10
+
+    def fake_load_rotation(date_str: str, market: str) -> dict:
+        del date_str
+        return payloads[market]
+
+    with patch("send_discord_brief._load_rotation", side_effect=fake_load_rotation), \
+         patch("send_discord_brief._load_earnings_plays", return_value=[]), \
+         patch("send_discord_brief._data_staleness_note", return_value=""):
+        text = build_brief_text("2026-05-05", "morning")
+
+    assert "NVDA" in text
+    assert "[高波动观察]" in text
 
 
 def test_data_limited_earnings_title_changes():

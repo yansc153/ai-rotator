@@ -65,11 +65,23 @@ def _previous_business_day(day: date) -> date:
     return prev
 
 
+def _previous_business_days(day: date, count: int) -> list[date]:
+    days: list[date] = []
+    cursor = day
+    while len(days) < count:
+        cursor = _previous_business_day(cursor)
+        days.append(cursor)
+    return days
+
+
 def _accepted_trade_dates(market: str, now: datetime | None = None) -> set[str]:
     current = (now or datetime.now(_CST)).astimezone(_CST).date()
     prev = _previous_business_day(current)
     if market == "US":
-        return {str(prev)}
+        # US holidays are not captured by a simple weekday calendar. Accept a
+        # short prior-business-day window so Monday holidays still use Friday's
+        # close instead of degrading an otherwise healthy fetch run.
+        return {str(day) for day in _previous_business_days(current, 3)}
     return {str(current), str(prev)}
 
 

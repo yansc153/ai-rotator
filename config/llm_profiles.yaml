@@ -11,9 +11,9 @@ profiles:
     provider_deep: "anthropic"
   budget:
     quick: "deepseek-chat"
-    deep: "glm-4-plus"
+    deep: "deepseek-chat"
     provider_quick: "deepseek"
-    provider_deep: "glm"
+    provider_deep: "deepseek"
   openai:
     quick: "gpt-5-mini"
     deep: "gpt-5.5"

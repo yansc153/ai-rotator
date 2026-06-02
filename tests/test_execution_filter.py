@@ -40,7 +40,7 @@ def test_build_freshness_record_missing_file():
     assert record.intraday_status in {"missing", "fresh", "stale", "failed"}
 
 
-def test_midday_missing_intraday_does_not_block_when_session_snapshot_is_fresh():
+def test_midday_missing_intraday_downgrades_to_watch_only():
     candidate = _base_candidate(market="CN", symbol="688256.SH", sector="AI芯片")
     with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
         mocked.return_value = build_freshness_record("CN", "688256.SH", "midday", "2026-05-05").model_copy(
@@ -54,8 +54,8 @@ def test_midday_missing_intraday_does_not_block_when_session_snapshot_is_fresh()
             earnings_index={},
             earnings_state="absent",
         )
-    assert decision["push_decision"] == "tradable_now"
-    assert "intraday_missing" not in decision["reason_codes"]
+    assert decision["push_decision"] == "watch_only"
+    assert "intraday_missing" in decision["reason_codes"]
 
 
 def test_non_active_sector_short_becomes_watch_only():
@@ -92,3 +92,74 @@ def test_evening_data_limited_catalyst_not_tradable_now():
         )
     assert decision["push_decision"] == "watch_only"
     assert "catalyst_data_limited" in decision["reason_codes"]
+
+
+def test_high_atr_warning_downgrades_tradable_candidate():
+    candidate = _base_candidate(warning_layer=["high_atr"])
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("US", "NVDA", "morning", "2026-05-05").model_copy(
+            update={"intraday_status": "fresh", "source_path": "/tmp/fresh.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="morning",
+            trade_date="2026-05-05",
+            active_sector_ids=["GPU"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+
+    assert decision["push_decision"] == "watch_only"
+    assert "high_atr_watch_only" in decision["reason_codes"]
+    assert "high_atr" in decision["invalid_if"]
+
+
+def test_invalid_three_locks_cannot_bypass_execution_filter():
+    candidate = _base_candidate(
+        three_locks={
+            "status": "invalid",
+            "score": 0.0,
+            "breakdown_support": True,
+        }
+    )
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("US", "NVDA", "morning", "2026-05-05").model_copy(
+            update={"intraday_status": "fresh", "source_path": "/tmp/fresh.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="morning",
+            trade_date="2026-05-05",
+            active_sector_ids=["GPU"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+
+    assert decision["push_decision"] == "watch_only"
+    assert "three_locks_invalid" in decision["reason_codes"]
+    assert "three_locks_support_break" in decision["invalid_if"]
+
+
+def test_confirmed_three_locks_adds_weight_but_does_not_override_scope():
+    candidate = _base_candidate(
+        market="CN",
+        symbol="688256.SH",
+        sector="AI芯片",
+        three_locks={"status": "triple_lock", "score": 92.0},
+    )
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("CN", "688256.SH", "evening", "2026-05-05").model_copy(
+            update={"intraday_status": "fresh", "source_path": "/tmp/fresh.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="evening",
+            trade_date="2026-05-05",
+            active_sector_ids=["AI芯片"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+
+    assert decision["push_decision"] == "rejected"
+    assert "market_out_of_scope" in decision["reason_codes"]
+    assert decision["execution_score"] < candidate["_session_score"]

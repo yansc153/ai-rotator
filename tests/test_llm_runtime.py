@@ -5,19 +5,20 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from tradingagents.runtime.llm import generate_json_object, resolve_llm_settings
+from tradingagents.runtime.llm import ApiSettings, generate_json_object, resolve_llm_settings
 
 
 def test_resolve_llm_settings_from_env():
     with patch.dict(
         "os.environ",
         {
+            "AI_ROTATOR_LLM_ENABLED": "1",
             "AI_ROTATOR_CODEX_BIN": sys.executable,
             "AI_ROTATOR_CODEX_MODEL": "gpt-5-codex",
             "AI_ROTATOR_CODEX_PROFILE": "local",
             "AI_ROTATOR_CODEX_TIMEOUT": "240",
         },
-        clear=False,
+        clear=True,
     ):
         settings = resolve_llm_settings()
     assert settings is not None
@@ -36,10 +37,11 @@ def test_generate_json_object_via_codex_exec():
     with patch.dict(
         "os.environ",
         {
+            "AI_ROTATOR_LLM_ENABLED": "1",
             "AI_ROTATOR_CODEX_BIN": sys.executable,
             "AI_ROTATOR_CODEX_MODEL": "gpt-5-codex",
         },
-        clear=False,
+        clear=True,
     ), patch("tradingagents.runtime.llm.subprocess.run", side_effect=fake_run) as run:
         payload = generate_json_object(system_prompt="system", user_prompt="user")
 
@@ -54,11 +56,59 @@ def test_generate_json_object_via_codex_exec():
 def test_generate_json_object_timeout_returns_empty():
     with patch.dict(
         "os.environ",
-        {"AI_ROTATOR_CODEX_BIN": sys.executable},
-        clear=False,
+        {"AI_ROTATOR_LLM_ENABLED": "1", "AI_ROTATOR_CODEX_BIN": sys.executable},
+        clear=True,
     ), patch(
         "tradingagents.runtime.llm.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="codex", timeout=180),
     ):
         payload = generate_json_object(system_prompt="system", user_prompt="user")
     assert payload == {}
+
+
+def test_resolve_llm_settings_prefers_deepseek_api():
+    with patch.dict(
+        "os.environ",
+        {
+            "AI_ROTATOR_LLM_ENABLED": "1",
+            "AI_ROTATOR_LLM_PROVIDER": "deepseek",
+            "AI_ROTATOR_LLM_MODEL": "deepseek-chat",
+            "AI_ROTATOR_LLM_TIMEOUT": "45",
+            "DEEPSEEK_API_KEY": "test-key",
+            "AI_ROTATOR_CODEX_BIN": sys.executable,
+        },
+        clear=True,
+    ):
+        settings = resolve_llm_settings()
+
+    assert isinstance(settings, ApiSettings)
+    assert settings.provider == "deepseek"
+    assert settings.model == "deepseek-chat"
+    assert settings.timeout_seconds == 45
+
+
+def test_generate_json_object_via_deepseek_api():
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true, "runtime": "deepseek"}'}}]}
+
+    with patch.dict(
+        "os.environ",
+        {
+            "AI_ROTATOR_LLM_ENABLED": "1",
+            "AI_ROTATOR_LLM_PROVIDER": "deepseek",
+            "AI_ROTATOR_LLM_MODEL": "deepseek-chat",
+            "DEEPSEEK_API_KEY": "test-key",
+        },
+        clear=True,
+    ), patch("tradingagents.runtime.llm.requests.post", return_value=FakeResponse()) as post:
+        payload = generate_json_object(system_prompt="system", user_prompt="user")
+
+    assert payload == {"ok": True, "runtime": "deepseek"}
+    request = post.call_args.kwargs
+    assert request["json"]["model"] == "deepseek-chat"
+    assert request["json"]["response_format"] == {"type": "json_object"}
+    assert request["headers"]["Authorization"] == "Bearer test-key"

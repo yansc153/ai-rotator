@@ -121,6 +121,15 @@ def _score_record(theme: dict[str, Any], spec: dict[str, Any], market_data: dict
     return round(max(0.0, min(score, 100.0)), 4)
 
 
+def _source_status(source_item: dict[str, Any], price_snapshot: dict[str, Any]) -> tuple[str, str]:
+    if source_item:
+        pool = str(source_item.get("pool") or "scan_hit")
+        return pool, f"本轮扫描命中:{pool}"
+    if price_snapshot:
+        return "tracked_watchlist", "静态研究清单，已接入本地行情"
+    return "untracked_static_watchlist", "静态研究清单，尚未接入本地行情/候选池"
+
+
 def build_bottleneck_block(
     source_items: list[dict[str, Any]],
     *,
@@ -149,11 +158,13 @@ def build_bottleneck_block(
             continue
         seen.add(key)
         source_item = source_by_key.get(key, {})
+        price_snapshot = _latest_price_snapshot(market, symbol)
         market_data = {
-            **_latest_price_snapshot(market, symbol),
+            **price_snapshot,
             **{k: source_item.get(k) for k in ("current_price", "ret_5d", "ret_20d", "atr_pct", "pool") if source_item.get(k) is not None},
         }
         score = _score_record(theme, spec, market_data, source_item)
+        source_pool, source_reason = _source_status(source_item, price_snapshot)
         output.append(
             {
                 "symbol": symbol,
@@ -185,7 +196,8 @@ def build_bottleneck_block(
                 "ret_20d": market_data.get("ret_20d"),
                 "atr_pct": market_data.get("atr_pct"),
                 "as_of": market_data.get("as_of"),
-                "source_pool": source_item.get("pool", "static_watchlist"),
+                "source_pool": source_pool,
+                "source_reason": source_reason,
             }
         )
 

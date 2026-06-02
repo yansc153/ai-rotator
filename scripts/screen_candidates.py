@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from _common import PROJECT_ROOT, load_env_file
+from tradingagents.agents.rotation.three_locks import evaluate_three_locks
 from tradingagents.runtime import read_fetch_manifest, today_cst
 
 UNIVERSE_CSV = ROOT / "data" / "universe_full.csv"
@@ -58,7 +59,7 @@ MARKET_MIN_SLOTS = {"CN": 25, "HK": 20, "US": 15}
 POOL_MIN_SLOTS = {"ambush": 5, "watch": 5}
 
 
-def _allowed_latest_dates(market: str) -> set[str]:
+def _fallback_allowed_latest_dates(market: str) -> set[str]:
     """Return the set of dates considered 'fresh enough' for screening.
 
     Always allow today AND yesterday for every market.
@@ -77,6 +78,22 @@ def _allowed_latest_dates(market: str) -> set[str]:
     """
     today = datetime.now(timezone(timedelta(hours=8))).date()
     return {str(today), str(today - timedelta(days=1))}
+
+
+def _allowed_latest_dates(market: str, manifest: dict | None) -> set[str]:
+    """Return accepted latest dates for a market using the fetch manifest when present.
+
+    `fetch_all_daily.py` already resolves per-market freshness, including the case
+    where US evening should still use the prior US trading day while HK may already
+    expose a same-day timestamp. Reuse that manifest instead of re-deriving a
+    simpler calendar rule here.
+    """
+    coverage = (manifest or {}).get("coverage", {})
+    accepted = coverage.get(market, {}).get("accepted_dates", [])
+    dates = {str(value) for value in accepted if value}
+    if dates:
+        return dates
+    return _fallback_allowed_latest_dates(market)
 
 
 def _safe_text(value: object, fallback: str) -> str:
@@ -338,12 +355,13 @@ def screen(top_n: int = TOP_N) -> list[dict]:
     for (market, symbol), grp in prices.groupby(["market", "symbol"]):
         grp = grp.sort_values("date")
         latest_date = str(grp["date"].iloc[-1].date())
-        if latest_date not in _allowed_latest_dates(market):
+        if latest_date not in _allowed_latest_dates(market, manifest):
             continue
         if len(grp) < MIN_DAYS:
             continue
 
         m = _compute_metrics(grp)
+        three_locks = evaluate_three_locks(grp)
         cur = m["current_price"]
         min_p = MIN_PRICE.get(market, 1.0)
 
@@ -389,6 +407,7 @@ def screen(top_n: int = TOP_N) -> list[dict]:
             "turnover5":           3.0,
             "priority_score":      score,
             "rotation_score":      score,
+            "three_locks":         three_locks,
             "pool":                pool,
             "is_loss":             info.get("is_loss", 0),
             "market_cap":          info.get("market_cap", 0),

@@ -70,6 +70,39 @@ def test_bottleneck_block_scores_and_preserves_hold_thesis():
     assert block[0]["bottleneck_score"] > 70
     assert "客户认证" in block[0]["hold_reason"]
     assert block[0]["current_price"] == 69.5
+    assert block[0]["source_pool"] == "day_active"
+    assert block[0]["source_reason"] == "本轮扫描命中:day_active"
+
+
+def test_bottleneck_block_marks_untracked_static_research_honestly():
+    config = {
+        "themes": [
+            {
+                "theme_id": "optical",
+                "theme": "光互连",
+                "symbols": [
+                    {
+                        "symbol": "SIVE_TEST",
+                        "market": "US",
+                        "company_name": "Sivers Test",
+                        "sector": "CW laser",
+                        "conviction": 80,
+                    }
+                ],
+            }
+        ]
+    }
+
+    block = build_bottleneck_block(
+        [],
+        session="evening",
+        limit=1,
+        focus_markets={"US"},
+        config=config,
+    )
+
+    assert block[0]["source_pool"] == "untracked_static_watchlist"
+    assert "尚未接入" in block[0]["source_reason"]
 
 
 def test_bottleneck_block_respects_focus_markets():

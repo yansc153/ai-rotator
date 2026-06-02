@@ -6,8 +6,8 @@ sessions:
     send_to_discord: true
     emit_short_block: true
     emit_swing_block: true
-    emit_bottleneck_block: true
-    bottleneck_block_size: 4
+    emit_bottleneck_block: false
+    bottleneck_block_size: 0
     emit_coverage_watch: false
     emit_earnings: false
     intraday_weight: 0.0
@@ -58,8 +58,8 @@ sessions:
     strict_send_requires_tradable: false
     emit_short_block: true
     emit_swing_block: false
-    emit_bottleneck_block: true
-    bottleneck_block_size: 3
+    emit_bottleneck_block: false
+    bottleneck_block_size: 0
     emit_coverage_watch: true
     emit_earnings: false
     intraday_weight: 0.0          # pre-open: no intraday data yet
@@ -83,13 +83,13 @@ sessions:
     brief_mode: "watchlist"
     short_block_source: "watchlist"
     include_swing_in_watchlist: true
-    short_block_size: 8
+    short_block_size: 5
     coverage_watch_size: 3
     strict_send_requires_tradable: false
     emit_short_block: true
     emit_swing_block: false
-    emit_bottleneck_block: true
-    bottleneck_block_size: 5
+    emit_bottleneck_block: false
+    bottleneck_block_size: 0
     emit_coverage_watch: true
     emit_earnings: false
     intraday_weight: 0.4

@@ -39,7 +39,12 @@ def _mk_conn() -> sqlite3.Connection:
 
 def test_accepted_trade_dates_uses_previous_business_day_for_us():
     monday = datetime(2026, 5, 25, 12, 0, tzinfo=timezone(timedelta(hours=8)))
-    assert daily._accepted_trade_dates("US", monday) == {"2026-05-22"}
+    assert daily._accepted_trade_dates("US", monday) == {"2026-05-20", "2026-05-21", "2026-05-22"}
+
+
+def test_accepted_trade_dates_allows_us_holiday_gap():
+    tuesday_after_us_holiday = datetime(2026, 5, 26, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    assert "2026-05-22" in daily._accepted_trade_dates("US", tuesday_after_us_holiday)
 
 
 def test_effective_market_coverage_accepts_previous_business_day_cache():

@@ -6,8 +6,8 @@
 #   ./scripts/local_pipeline.sh midday     # 12:30 — re-screen + 盘中播报
 #   ./scripts/local_pipeline.sh evening    # 20:30 — US prep watchlist + Discord push
 #
-# This script is the local runtime entrypoint for launchd-based scheduling.
-# LLM enrichment is expected to use the locally logged-in Codex CLI session.
+# This script is the local/runtime entrypoint for scheduled sessions.
+# LLM enrichment is optional; deterministic scan + Discord push can run without it.
 
 set -euo pipefail
 
