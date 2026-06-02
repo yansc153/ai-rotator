@@ -17,8 +17,8 @@ from tradingagents.runtime.paths import PROJECT_ROOT
 DAILY_CACHE_PATH = PROJECT_ROOT / "data" / "daily_cache.db"
 
 TRADE_PLAYBOOKS = {
-    "premarket_open_sell": {"side": "LONG", "label": "主多/开盘强势"},
-    "intraday_dip_reversal": {"side": "LONG", "label": "回踩多"},
+    "premarket_open_sell": {"side": "LONG", "label": "主多/开盘强承接"},
+    "intraday_dip_reversal": {"side": "LONG", "label": "主多/回踩承接"},
     "overheat_failure_short": {"side": "SHORT", "label": "反手空"},
     "radar_watch": {"side": "LONG", "label": "高波动雷达"},
 }
