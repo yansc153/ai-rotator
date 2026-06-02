@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import fetch_all_daily as daily
+import backfill_yfinance_daily as backfill
 
 
 def _mk_conn() -> sqlite3.Connection:
@@ -86,3 +87,20 @@ def test_yf_parse_rows_can_be_mapped_back_to_canonical_hk_symbol():
     for row in rows:
         row["symbol"] = mapped.get(row["symbol"], row["symbol"])
     assert rows[0]["symbol"] == "00700.HK"
+
+
+def test_backfill_uses_yfinance_symbol_but_preserves_canonical_symbol():
+    universe = pd.DataFrame(
+        [
+            {"market": "CN", "symbol": "600941.SH", "yf_symbol": "600941.SS"},
+            {"market": "HK", "symbol": "00700.HK", "yf_symbol": "0700.HK"},
+        ]
+    )
+
+    cn_tickers, cn_map = backfill._market_tickers(universe, "CN")
+    hk_tickers, hk_map = backfill._market_tickers(universe, "HK")
+
+    assert cn_tickers == ["600941.SS"]
+    assert cn_map == {"600941.SS": "600941.SH"}
+    assert hk_tickers == ["0700.HK"]
+    assert hk_map == {"0700.HK": "00700.HK"}
