@@ -100,7 +100,7 @@ def build_recommendations(
                     0.0,
                 ),
             })
-    shorts = sorted(shorts, key=lambda item: item["rotation_score"], reverse=True)[:5]
+    shorts = sorted(shorts, key=lambda item: item["rotation_score"], reverse=True)
 
     # Swing: only use the ambush pool (stocks down ≥20% from 20d high — left-side entry).
     # If no ambush candidates exist, emit no swing recommendations rather than
@@ -126,7 +126,7 @@ def build_recommendations(
                     0.0,
                 ),
             })
-    swings = sorted(swings, key=lambda item: item["priority_score"], reverse=True)[:3]
+    swings = sorted(swings, key=lambda item: item["priority_score"], reverse=True)
     run_id = str(uuid4())
     insert_recommendations(
         [

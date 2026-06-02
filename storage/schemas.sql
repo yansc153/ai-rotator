@@ -55,3 +55,45 @@ CREATE TABLE IF NOT EXISTS decision_ledger (
   outcome_5d REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS signal_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  session TEXT NOT NULL,
+  signal_key TEXT NOT NULL,
+  market TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  company_name TEXT,
+  sector TEXT,
+  playbook TEXT NOT NULL,
+  side TEXT NOT NULL,
+  push_price REAL NOT NULL,
+  push_score REAL,
+  three_locks_status TEXT,
+  three_locks_score REAL,
+  support_level REAL,
+  pressure_level REAL,
+  reason TEXT,
+  source_payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(trade_date, session, market, symbol, playbook)
+);
+
+CREATE TABLE IF NOT EXISTS signal_outcomes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_id INTEGER NOT NULL,
+  review_date TEXT NOT NULL,
+  current_price REAL,
+  raw_return_pct REAL,
+  trade_return_pct REAL,
+  max_price_since_push REAL,
+  min_price_since_push REAL,
+  max_gain_pct REAL,
+  max_drawdown_pct REAL,
+  days_since_signal INTEGER,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(signal_id, review_date),
+  FOREIGN KEY(signal_id) REFERENCES signal_ledger(id)
+);

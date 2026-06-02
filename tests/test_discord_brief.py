@@ -260,7 +260,7 @@ def test_build_brief_text_sessions_have_different_headers():
     assert "盘前早报" in m
     assert "A股午盘信号" in d
     assert "AI赛道短线精灵" in e
-    assert "美股专区" in e
+    assert "交易剧本" in e
 
 
 def test_midday_excludes_us_stocks():
@@ -329,8 +329,8 @@ def test_evening_watchlist_fills_from_candidate_set_to_five():
 
 def test_evening_watchlist_text_uses_layers_not_entry_command():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "美股专区" in text
-    assert "结构：" in text
+    assert "交易剧本B｜回踩多｜强势回落" in text
+    assert "尾盘或次日盘前卖" in text
     assert "买入 " not in text
 
 
@@ -349,10 +349,10 @@ def test_evening_omits_bottleneck_from_payload_and_text():
 def test_evening_renders_decision_sections_and_preserves_watchlist():
     text = _build_text_with_fixtures("2026-05-05", "evening")
     assert "30秒决策版" in text
-    assert "美股专区" in text
-    assert "港股专区" in text
-    assert "A股专区" in text
-    assert "禁区池｜看起来强，但盈亏比差" in text
+    assert "交易剧本A｜主多｜轮动承接" in text
+    assert "交易剧本B｜回踩多｜强势回落" in text
+    assert "交易剧本C｜反手空｜过热失败" in text
+    assert "交易剧本D｜雷达｜高波动观察" in text
     assert "关键映射链" in text
     assert "开盘脚本" in text
     assert "三把锁：" in text
@@ -361,13 +361,14 @@ def test_evening_renders_decision_sections_and_preserves_watchlist():
 def test_payload_contains_decision_layers():
     payload = _build_payload_with_fixtures("2026-05-05", "evening")
     assert payload["market_state"]["regime"]
-    assert payload["opportunity_buckets"]["daytrade_focus"]
+    assert "premarket_open_sell" in payload["opportunity_buckets"]
+    assert payload["opportunity_buckets"]["intraday_dip_reversal"]
+    assert "overheat_failure_short" in payload["opportunity_buckets"]
+    assert "radar_watch" in payload["opportunity_buckets"]
     assert "danger_pool" in payload
     assert "mapping_chain" in payload
     assert "open_script" in payload
-    assert payload["market_sections"]["US"]["label"] == "美股专区"
-    assert payload["market_sections"]["HK"]["label"] == "港股专区"
-    assert payload["market_sections"]["CN"]["label"] == "A股专区"
+    assert payload["market_sections"] == {}
 
 
 def test_pick_with_diversity_market_guarantees():
@@ -385,7 +386,7 @@ def test_pick_with_diversity_market_guarantees():
     assert "HK" in markets_in_result
 
 
-def test_missing_market_goes_to_coverage_watch_not_short_block():
+def test_missing_recommendation_market_can_enter_playbook_from_candidate_set():
     payloads = _fake_rotation_payloads()
     payloads["US"]["recommendations"] = [payloads["US"]["recommendations"][0]]
     payloads["AH"]["recommendations"] = [payloads["AH"]["recommendations"][1], payloads["AH"]["recommendations"][2]]
@@ -397,11 +398,11 @@ def test_missing_market_goes_to_coverage_watch_not_short_block():
     with patch("send_discord_brief._load_rotation", side_effect=fake_load_rotation):
         payload = build_brief_payload("2026-05-05", "morning")
 
-    short_markets = {item["market"] for item in payload["short_block"]}
-    assert "CN" not in short_markets
-    coverage_markets = {item["market"] for item in payload["coverage_watch"]}
-    swing_markets = {item["market"] for item in payload["swing_block"]}
-    assert "CN" in coverage_markets or "CN" in swing_markets
+    playbook_markets = {
+        item["market"]
+        for item in payload["opportunity_buckets"]["premarket_open_sell"]
+    }
+    assert "CN" in playbook_markets
 
 
 def test_brief_renders_market_coverage_watchlist():
@@ -424,23 +425,25 @@ def test_brief_renders_market_coverage_watchlist():
 
 def test_morning_now_renders_short_and_swing_blocks():
     text = _build_text_with_fixtures("2026-05-05", "morning")
-    assert "美股专区" in text
-    assert "港股专区" in text
-    assert "A股专区" in text
+    assert "交易剧本A｜主多｜轮动承接" in text
+    assert "交易剧本B｜回踩多｜强势回落" in text
+    assert "短线 1-2天" not in text
 
 
-def test_market_sections_show_scope_reference_in_evening():
+def test_out_of_scope_names_do_not_enter_trade_playbooks():
     text = _build_text_with_fixtures("2026-05-05", "evening")
 
-    assert "A股专区" in text
-    assert "688256.SH" in text
-    assert "[参考]" in text
+    assert "A股专区" not in text
+    assert "688256.SH" not in text
+    assert "[参考]" not in text
 
 
-def test_market_sections_surface_high_atr_as_observation():
+def test_high_atr_surfaces_as_radar_not_trade():
     payloads = _fake_rotation_payloads()
     payloads["US"]["candidate_set"][0]["atr_pct"] = 0.10
     payloads["US"]["recommendations"][0]["atr_pct"] = 0.10
+    payloads["US"]["candidate_set"][0]["warning_layer"] = ["high_atr"]
+    payloads["US"]["recommendations"][0]["warning_layer"] = ["high_atr"]
 
     def fake_load_rotation(date_str: str, market: str) -> dict:
         del date_str
@@ -452,7 +455,116 @@ def test_market_sections_surface_high_atr_as_observation():
         text = build_brief_text("2026-05-05", "morning")
 
     assert "NVDA" in text
-    assert "[高波动观察]" in text
+    assert "高波动雷达" in text
+    assert "波动过高，只观察" in text
+
+
+def test_candidate_set_entries_are_admitted_by_standard_not_fixed_quota():
+    payloads = _fake_rotation_payloads()
+    extras = []
+    for idx in range(1, 9):
+        extras.append(
+            {
+                "symbol": f"USAI{idx}",
+                "company_name": f"US AI {idx}",
+                "market": "US",
+                "sector": "GPU",
+                "pool": "day_active",
+                "horizon": "short",
+                "rotation_score": 75.0 - idx,
+                "priority_score": 75.0 - idx,
+                "three_locks": {"status": "double_lock", "score": 60.0, "support_level": 20.0 + idx, "pressure_level": 25.0 + idx},
+                "ret_5d": 0.06,
+                "current_price": 20.0 + idx,
+                "market_cap": 10.0,
+                "active_sector": True,
+                "rank_in_sector": idx,
+                "thesis": "US AI candidate-set standard admission",
+            }
+        )
+    payloads["US"]["candidate_set"] = extras
+    payloads["US"]["recommendations"] = []
+
+    def fake_load_rotation(date_str: str, market: str) -> dict:
+        del date_str
+        return payloads[market]
+
+    with patch("send_discord_brief._load_rotation", side_effect=fake_load_rotation), \
+         patch("send_discord_brief._load_earnings_plays", return_value=[]), \
+         patch("send_discord_brief._data_staleness_note", return_value=""):
+        text = build_brief_text("2026-05-05", "morning")
+        payload = build_brief_payload("2026-05-05", "morning")
+
+    bucket_symbols = {item["symbol"] for item in payload["opportunity_buckets"]["premarket_open_sell"]}
+    assert {f"USAI{idx}" for idx in range(1, 9)} <= bucket_symbols
+    assert "USAI8" in text
+
+
+def test_rejected_name_only_enters_danger_with_reject_reason():
+    payloads = _fake_rotation_payloads()
+    rejected_name = {
+        "symbol": "INOD",
+        "company_name": "Innodata",
+        "market": "US",
+        "sector": "GPU",
+        "pool": "day_active",
+        "horizon": "short",
+        "rotation_score": 82.0,
+        "priority_score": 82.0,
+        "three_locks": {"status": "triple_lock", "score": 90.0, "support_level": 45.0, "pressure_level": 55.0},
+        "ret_5d": 0.12,
+        "current_price": 50.0,
+        "market_cap": 1.0,
+        "atr_pct": 0.10,
+        "warning_layer": ["high_atr"],
+        "active_sector": True,
+        "rank_in_sector": 1,
+        "thesis": "Looks strong but fails liquidity floor",
+    }
+    payloads["US"]["candidate_set"].append(rejected_name)
+    payloads["US"]["recommendations"].append(rejected_name)
+
+    def fake_load_rotation(date_str: str, market: str) -> dict:
+        del date_str
+        return payloads[market]
+
+    with patch("send_discord_brief._load_rotation", side_effect=fake_load_rotation), \
+         patch("send_discord_brief._load_earnings_plays", return_value=[]), \
+         patch("send_discord_brief._data_staleness_note", return_value=""):
+        payload = build_brief_payload("2026-05-05", "morning")
+        text = build_brief_text("2026-05-05", "morning", payload=payload)
+
+    all_trade_symbols = {
+        item["symbol"]
+        for bucket_name in ("premarket_open_sell", "intraday_dip_reversal", "radar_watch")
+        for item in payload["opportunity_buckets"][bucket_name]
+    }
+    assert "INOD" not in all_trade_symbols
+    danger = next(item for item in payload["danger_pool"] if item["symbol"] == "INOD")
+    assert danger["reason"] == "liquidity_below_floor"
+    assert "INOD" in text
+    assert "liquidity_below_floor" in text
+
+
+def test_rejected_high_atr_is_avoid_not_observation():
+    item = {
+        "symbol": "INOD",
+        "market": "US",
+        "push_decision": "rejected",
+        "warning_layer": ["high_atr"],
+        "reason_codes": ["liquidity_below_floor"],
+    }
+
+    assert brief_module._decision_label(item) == "回避"
+    assert brief_module._action_line(item) == "动作：当前结构失效，今天不列交易级"
+
+
+def test_discord_chunks_split_on_lines_when_possible():
+    text = "\n".join([f"line-{idx}" for idx in range(400)])
+    chunks = brief_module._split_discord_chunks(text)
+
+    assert all(len(chunk) <= brief_module.DISCORD_MESSAGE_LIMIT for chunk in chunks)
+    assert "\n".join(chunks).replace("\n\n", "\n") == text
 
 
 def test_data_limited_earnings_title_changes():

@@ -1,12 +1,17 @@
 [Unit]
 Description=AI Rotator pipeline (%i)
-Wants=network-online.target docker.service
-After=network-online.target docker.service
+Requires=docker.service
+Wants=network-online.target
+After=network-online.target docker.service docker.socket
+StartLimitIntervalSec=30min
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 WorkingDirectory=__REPO_DIR__
 TimeoutStartSec=45min
+Restart=on-failure
+RestartSec=5min
 ExecStart=/usr/bin/env docker compose run --rm --no-deps ai-rotator %i
 
 [Install]

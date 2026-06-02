@@ -130,3 +130,160 @@ def list_decision_ledger(trade_date: str | None = None, session: str | None = No
     with connect() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
     return [dict(row) for row in rows]
+
+
+def upsert_signal_ledger(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    ensure_schema()
+    with connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO signal_ledger (
+              run_id, trade_date, session, signal_key, market, symbol, company_name,
+              sector, playbook, side, push_price, push_score, three_locks_status,
+              three_locks_score, support_level, pressure_level, reason, source_payload_json
+            ) VALUES (
+              :run_id, :trade_date, :session, :signal_key, :market, :symbol, :company_name,
+              :sector, :playbook, :side, :push_price, :push_score, :three_locks_status,
+              :three_locks_score, :support_level, :pressure_level, :reason, :source_payload_json
+            )
+            ON CONFLICT(trade_date, session, market, symbol, playbook) DO UPDATE SET
+              run_id = excluded.run_id,
+              signal_key = excluded.signal_key,
+              company_name = excluded.company_name,
+              sector = excluded.sector,
+              side = excluded.side,
+              push_price = excluded.push_price,
+              push_score = excluded.push_score,
+              three_locks_status = excluded.three_locks_status,
+              three_locks_score = excluded.three_locks_score,
+              support_level = excluded.support_level,
+              pressure_level = excluded.pressure_level,
+              reason = excluded.reason,
+              source_payload_json = excluded.source_payload_json
+            """,
+            rows,
+        )
+        keys = [
+            (row["trade_date"], row["session"], row["market"], row["symbol"], row["playbook"])
+            for row in rows
+        ]
+        out: list[dict[str, Any]] = []
+        for key in keys:
+            row = conn.execute(
+                """
+                SELECT * FROM signal_ledger
+                WHERE trade_date = ? AND session = ? AND market = ? AND symbol = ? AND playbook = ?
+                """,
+                key,
+            ).fetchone()
+            if row:
+                out.append(dict(row))
+    return out
+
+
+def list_signal_ledger(
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    session: str | None = None,
+    include_avoid: bool = False,
+) -> list[dict[str, Any]]:
+    ensure_schema()
+    query = "SELECT * FROM signal_ledger"
+    params: list[Any] = []
+    clauses: list[str] = []
+    if since:
+        clauses.append("trade_date >= ?")
+        params.append(since)
+    if until:
+        clauses.append("trade_date <= ?")
+        params.append(until)
+    if session:
+        clauses.append("session = ?")
+        params.append(session)
+    if not include_avoid:
+        clauses.append("side != 'AVOID'")
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY trade_date DESC, session DESC, push_score DESC, id DESC"
+    with connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_signal_outcomes(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    ensure_schema()
+    with connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO signal_outcomes (
+              signal_id, review_date, current_price, raw_return_pct, trade_return_pct,
+              max_price_since_push, min_price_since_push, max_gain_pct, max_drawdown_pct,
+              days_since_signal, status
+            ) VALUES (
+              :signal_id, :review_date, :current_price, :raw_return_pct, :trade_return_pct,
+              :max_price_since_push, :min_price_since_push, :max_gain_pct, :max_drawdown_pct,
+              :days_since_signal, :status
+            )
+            ON CONFLICT(signal_id, review_date) DO UPDATE SET
+              current_price = excluded.current_price,
+              raw_return_pct = excluded.raw_return_pct,
+              trade_return_pct = excluded.trade_return_pct,
+              max_price_since_push = excluded.max_price_since_push,
+              min_price_since_push = excluded.min_price_since_push,
+              max_gain_pct = excluded.max_gain_pct,
+              max_drawdown_pct = excluded.max_drawdown_pct,
+              days_since_signal = excluded.days_since_signal,
+              status = excluded.status
+            """,
+            rows,
+        )
+
+
+def list_latest_signal_outcomes(
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    review_date: str | None = None,
+    include_avoid: bool = False,
+) -> list[dict[str, Any]]:
+    ensure_schema()
+    params: list[Any] = []
+    clauses: list[str] = []
+    if since:
+        clauses.append("l.trade_date >= ?")
+        params.append(since)
+    if until:
+        clauses.append("l.trade_date <= ?")
+        params.append(until)
+    if review_date:
+        clauses.append("o.review_date = ?")
+        params.append(review_date)
+    if not include_avoid:
+        clauses.append("l.side != 'AVOID'")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    query = f"""
+        SELECT
+          l.*,
+          o.review_date,
+          o.current_price,
+          o.raw_return_pct,
+          o.trade_return_pct,
+          o.max_price_since_push,
+          o.min_price_since_push,
+          o.max_gain_pct,
+          o.max_drawdown_pct,
+          o.days_since_signal,
+          o.status
+        FROM signal_ledger l
+        JOIN signal_outcomes o ON o.signal_id = l.id
+        {where}
+        ORDER BY l.trade_date DESC, o.trade_return_pct DESC, l.push_score DESC
+    """
+    with connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [dict(row) for row in rows]

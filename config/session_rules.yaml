@@ -4,6 +4,7 @@ sessions:
     caption: "美股昨收 + A/HK开盘布局"
     focus_markets: ["CN", "HK", "US"]
     send_to_discord: true
+    include_candidate_set: true
     emit_short_block: true
     emit_swing_block: true
     emit_bottleneck_block: false
@@ -26,6 +27,7 @@ sessions:
     caption: "A/HK午盘决策 + 尾盘预备"
     focus_markets: ["CN", "HK"]
     send_to_discord: true
+    include_candidate_set: true
     strict_send_requires_tradable: true
     emit_short_block: true
     emit_swing_block: false
@@ -52,6 +54,7 @@ sessions:
     workflow_role: "ah_open_watchlist"
     brief_mode: "watchlist"
     short_block_source: "watchlist"
+    include_candidate_set: true
     include_swing_in_watchlist: false
     short_block_size: 5
     coverage_watch_size: 3
@@ -82,6 +85,7 @@ sessions:
     workflow_role: "us_prep_watchlist"
     brief_mode: "watchlist"
     short_block_source: "watchlist"
+    include_candidate_set: true
     include_swing_in_watchlist: true
     short_block_size: 5
     coverage_watch_size: 3

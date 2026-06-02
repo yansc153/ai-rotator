@@ -4,6 +4,7 @@ logs/
 .context/
 .omx/
 reports/daily/
+reports/signal_review/
 storage/ai_rotator.db
 .env
 __pycache__/
