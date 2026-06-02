@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import sys
 from datetime import date, datetime, timezone, timedelta
@@ -350,6 +351,7 @@ def screen(top_n: int = TOP_N) -> list[dict]:
     prices = _load_price_history(conn)
     conn.close()
 
+    min_days = int(os.getenv("AI_ROTATOR_MIN_DAYS", str(MIN_DAYS)))
     candidates: list[dict] = []
 
     for (market, symbol), grp in prices.groupby(["market", "symbol"]):
@@ -357,7 +359,7 @@ def screen(top_n: int = TOP_N) -> list[dict]:
         latest_date = str(grp["date"].iloc[-1].date())
         if latest_date not in _allowed_latest_dates(market, manifest):
             continue
-        if len(grp) < MIN_DAYS:
+        if len(grp) < min_days:
             continue
 
         m = _compute_metrics(grp)
