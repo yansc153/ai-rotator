@@ -154,6 +154,23 @@ THREE_LOCK_LABELS = {
 }
 RADAR_MIN_SCORE = 35.0
 DANGER_MIN_SCORE = -15.0
+AI_ROTATION_KEYWORDS = (
+    "AI",
+    "人工智能",
+    "算力",
+    "数据",
+    "光通信",
+    "AIOps",
+    "DevOps",
+    "Agent",
+    "服务器",
+    "芯片",
+    "半导体",
+    "存储",
+    "watsonx",
+    "GPU",
+    "云计算",
+)
 
 
 def _load_rotation(date_str: str, market: str) -> dict[str, Any]:
@@ -445,6 +462,14 @@ def _warnings(item: dict[str, Any]) -> set[str]:
     return set(item.get("warning_layer", []) or [])
 
 
+def _is_ai_rotation_family(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(key, ""))
+        for key in ("sector", "sector_tags", "chain_group", "company_name")
+    )
+    return any(keyword in text for keyword in AI_ROTATION_KEYWORDS)
+
+
 def _is_hard_reject(item: dict[str, Any]) -> bool:
     return item.get("push_decision") == "rejected"
 
@@ -479,7 +504,12 @@ def _intraday_dip_candidate(item: dict[str, Any]) -> bool:
         return False
     if "high_atr" in _warnings(item):
         return False
-    return item.get("push_decision") in {"tradable_now", "watch_only"} and _execution_score(item) >= 35.0
+    if item.get("push_decision") not in {"tradable_now", "watch_only"}:
+        return False
+    if _execution_score(item) >= 35.0:
+        return True
+    raw_score = float(item.get("rotation_score", item.get("priority_score", 0.0)) or 0.0)
+    return _is_ai_rotation_family(item) and raw_score >= 15.0 and _execution_score(item) >= 4.0
 
 
 def _radar_candidate(item: dict[str, Any]) -> bool:
@@ -508,11 +538,19 @@ def _playbook_line(item: dict[str, Any], playbook: str) -> dict[str, Any]:
         line["reason"] = "剧本A：盘前/开盘强承接才参与；开盘不延续就卖掉，不恋战"
     elif playbook == "intraday_dip_reversal":
         line["trade_style"] = "回落低吸"
-        line["reason"] = (
-            f"剧本B：盘中跌到 {_fmt_price(support)} 附近且不破再买；尾盘或次日盘前卖"
-            if support is not None
-            else "剧本B：只等盘中回落承接确认；尾盘或次日盘前卖"
-        )
+        if not item.get("active_sector") and _is_ai_rotation_family(item):
+            line["trade_style"] = "扩展回踩"
+            line["reason"] = (
+                f"剧本B扩展：AI分支未进今日top3，但三把锁有效；只等 {_fmt_price(support)} 附近承接，不追"
+                if support is not None
+                else "剧本B扩展：AI分支未进今日top3，只等盘中承接确认，不追"
+            )
+        else:
+            line["reason"] = (
+                f"剧本B：盘中跌到 {_fmt_price(support)} 附近且不破再买；尾盘或次日盘前卖"
+                if support is not None
+                else "剧本B：只等盘中回落承接确认；尾盘或次日盘前卖"
+            )
     elif playbook == "overheat_failure_short":
         line["trade_style"] = "反手空观察"
         line["reason"] = "剧本C：高位转弱后才看空；跌破VWAP/开盘区间且相对QQQ/SMH转弱才执行"

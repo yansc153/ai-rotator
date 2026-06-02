@@ -32,6 +32,11 @@ The system uses rules-driven admission, not fixed counts. Some days may show 3 n
 - `radar_watch`: 高波动雷达. The structure is interesting but not a clean action signal because it is too volatile, too far from support, or lacks trigger clarity.
 - `danger_pool`: 禁区池. Looks tempting but fails execution/liquidity/freshness/risk constraints.
 
+`intraday_dip_reversal` can include two tiers:
+
+- Core long candidates from the active top sectors.
+- AI extension candidates from adjacent AI branches such as AI Agent, AI DevOps, AIOps, AI servers, compute, chips, data, storage, cloud, and optical links, provided the three-lock structure is still valid.
+
 Ranking favors highest probability and clearest execution first, not the largest story or widest potential move.
 
 ## Signal Ledger

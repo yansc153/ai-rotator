@@ -500,6 +500,53 @@ def test_candidate_set_entries_are_admitted_by_standard_not_fixed_quota():
     assert "USAI8" in text
 
 
+def test_evening_admits_ai_extension_branch_into_pullback_longs():
+    payloads = _fake_rotation_payloads()
+    ai_extension = {
+        "symbol": "AIX",
+        "company_name": "AI Extension",
+        "market": "US",
+        "sector": "AI Agent",
+        "sector_tags": "AI Agent;软件/SaaS",
+        "chain_group": "AI Agent",
+        "pool": "day_active",
+        "horizon": "short",
+        "rotation_score": 22.0,
+        "priority_score": 22.0,
+        "three_locks": {"status": "double_lock", "score": 60.0, "support_level": 18.0, "pressure_level": 25.0},
+        "ret_5d": 0.12,
+        "current_price": 22.0,
+        "market_cap": 8.0,
+        "active_sector": False,
+        "rank_in_sector": 1,
+        "thesis": "AI extension branch with valid structure",
+    }
+    non_ai_extension = {
+        **ai_extension,
+        "symbol": "OILX",
+        "company_name": "Oil Extension",
+        "sector": "铀",
+        "sector_tags": "铀",
+        "chain_group": "铀",
+        "thesis": "non AI branch",
+    }
+    payloads["US"]["candidate_set"] = payloads["US"]["candidate_set"] + [ai_extension, non_ai_extension]
+    payloads["US"]["recommendations"] = payloads["US"]["recommendations"] + [ai_extension, non_ai_extension]
+
+    def fake_load_rotation(date_str: str, market: str) -> dict:
+        del date_str
+        return payloads[market]
+
+    with patch("send_discord_brief._load_rotation", side_effect=fake_load_rotation), \
+         patch("send_discord_brief._load_earnings_plays", return_value=[]), \
+         patch("send_discord_brief._data_staleness_note", return_value=""):
+        payload = build_brief_payload("2026-05-05", "evening")
+
+    bucket_symbols = {item["symbol"] for item in payload["opportunity_buckets"]["intraday_dip_reversal"]}
+    assert "AIX" in bucket_symbols
+    assert "OILX" not in bucket_symbols
+
+
 def test_rejected_name_only_enters_danger_with_reject_reason():
     payloads = _fake_rotation_payloads()
     rejected_name = {
