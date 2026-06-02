@@ -19,6 +19,7 @@ Keep: last 30 calendar days (auto-pruned on each run)
 """
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import sys
@@ -44,6 +45,7 @@ KEEP_DAYS = 30        # rolling window kept in SQLite
 YF_CHUNK  = 400       # tickers per yf.download call (CN batches)
 YF_CHUNK_SMALL = 50  # smaller batch for US/HK — large batches silently drop many tickers
 YF_PERIOD = "30d"     # history window for yfinance
+YF_TIMEOUT = int(os.getenv("AI_ROTATOR_YF_TIMEOUT", "15"))
 TENCENT_CHUNK = 200   # tickers per Tencent Finance API call
 TENCENT_URL   = "http://qt.gtimg.cn/q={codes}"
 TENCENT_RETRIES = 3
@@ -404,7 +406,7 @@ def _yf_batch_cn(
         chunk_yf = yf_tickers[i: i + YF_CHUNK]
         try:
             raw = yf.download(chunk_yf, period=YF_PERIOD, auto_adjust=True,
-                              progress=False, threads=True)
+                              progress=False, threads=True, timeout=YF_TIMEOUT)
         except Exception as exc:
             print(f"  CN yf chunk {i//YF_CHUNK+1}: download error — {exc}", flush=True)
             continue
@@ -519,7 +521,7 @@ def _yf_batch(
         chunk = tickers[i: i + chunk_size]
         try:
             raw = yf.download(chunk, period=YF_PERIOD, auto_adjust=True,
-                              progress=False, threads=True)
+                              progress=False, threads=True, timeout=YF_TIMEOUT)
         except Exception as exc:
             print(f"  {market} chunk {i//chunk_size+1}/{n_chunks}: download error — {exc}", flush=True)
             continue
@@ -565,7 +567,7 @@ def _yf_batch(
         def _dl_one(ticker: str) -> pd.DataFrame:  # runs in a thread
             return yf.download(
                 [ticker], period=YF_PERIOD, auto_adjust=True,
-                progress=False, threads=False,
+                progress=False, threads=False, timeout=YF_TIMEOUT,
             )
 
         for ticker in to_retry:

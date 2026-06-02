@@ -104,3 +104,20 @@ def test_backfill_uses_yfinance_symbol_but_preserves_canonical_symbol():
     assert cn_map == {"600941.SS": "600941.SH"}
     assert hk_tickers == ["0700.HK"]
     assert hk_map == {"0700.HK": "00700.HK"}
+
+
+def test_backfill_skips_ready_symbols_by_canonical_symbol():
+    tickers = ["600941.SS", "0700.HK", "NVDA"]
+    ticker_to_symbol = {
+        "600941.SS": "600941.SH",
+        "0700.HK": "00700.HK",
+        "NVDA": "NVDA",
+    }
+
+    remaining = backfill._filter_tickers_needing_backfill(
+        tickers,
+        ticker_to_symbol,
+        {"600941.SH", "NVDA"},
+    )
+
+    assert remaining == ["0700.HK"]

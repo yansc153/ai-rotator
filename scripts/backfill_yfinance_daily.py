@@ -68,6 +68,31 @@ def _coverage(conn: sqlite3.Connection, min_bars: int) -> list[tuple[str, int, i
     ).fetchall()
 
 
+def _ready_symbols(conn: sqlite3.Connection, market: str, min_bars: int) -> set[str]:
+    cutoff = (date.today() - timedelta(days=daily.KEEP_DAYS)).isoformat()
+    return {
+        str(row[0])
+        for row in conn.execute(
+            """
+            SELECT symbol
+            FROM daily_prices
+            WHERE market=? AND date >= ?
+            GROUP BY symbol
+            HAVING COUNT(*) >= ?
+            """,
+            (market, cutoff, min_bars),
+        )
+    }
+
+
+def _filter_tickers_needing_backfill(
+    tickers: list[str],
+    ticker_to_symbol: dict[str, str],
+    ready_symbols: set[str],
+) -> list[str]:
+    return [ticker for ticker in tickers if ticker_to_symbol.get(ticker, ticker) not in ready_symbols]
+
+
 def backfill(markets: list[str], chunk_size: int, min_bars: int) -> None:
     load_env_file()
     universe_path = daily.UNIVERSE_CSV
@@ -87,7 +112,19 @@ def backfill(markets: list[str], chunk_size: int, min_bars: int) -> None:
             print(f"{market}: no tickers", flush=True)
             totals[market] = 0
             continue
-        print(f"{market}: backfilling {len(tickers)} tickers via yfinance 30d ...", flush=True)
+        ready = _ready_symbols(conn, market, min_bars)
+        original_count = len(tickers)
+        tickers = _filter_tickers_needing_backfill(tickers, ticker_to_symbol, ready)
+        skipped = original_count - len(tickers)
+        if not tickers:
+            print(f"{market}: all {original_count} tickers already have >= {min_bars} bars", flush=True)
+            totals[market] = 0
+            continue
+        print(
+            f"{market}: backfilling {len(tickers)} tickers via yfinance 30d "
+            f"(skipping {skipped} already ready) ...",
+            flush=True,
+        )
         saved = daily._yf_batch(
             tickers,
             market,
