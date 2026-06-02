@@ -26,8 +26,8 @@ Every pushed ticker should answer five questions:
 
 The system uses rules-driven admission, not fixed counts. Some days may show 3 names, some days may show 10 or more, depending on quality.
 
-- `premarket_open_sell`: 主多 / 轮动承接. Three locks are valid, the AI sector is active, and the name has enough strength to justify premarket/open focus.
-- `intraday_dip_reversal`: 回踩多 / 强势回落. Three locks are valid, support exists, and the trade waits for a pullback near support/VWAP/opening range.
+- `premarket_open_sell`: 主多 / 开盘强承接. Three locks are valid, the AI sector is active, and the name has enough strength to justify premarket/open focus.
+- `intraday_dip_reversal`: 主多 / 回踩承接. This is still a long setup, but it is not a chase setup; three locks are valid, support exists, and the trade waits for a pullback near support/VWAP/opening range.
 - `overheat_failure_short`: 反手空 / 过热失败. Mostly empty by design; only appears when a hot name begins to fail structurally.
 - `radar_watch`: 高波动雷达. The structure is interesting but not a clean action signal because it is too volatile, too far from support, or lacks trigger clarity.
 - `danger_pool`: 禁区池. Looks tempting but fails execution/liquidity/freshness/risk constraints.

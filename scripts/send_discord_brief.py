@@ -619,8 +619,8 @@ def _build_market_state(
 
     summary = (
         f"当前更像{regime}，主线状态为{mainline_health}，宽度表现为{breadth}。"
-        f"今日交易剧本：主多 {len(premarket_open_sell)} 个，"
-        f"回踩多 {len(intraday_dip_reversal)} 个，"
+        f"今日交易剧本：开盘主多 {len(premarket_open_sell)} 个，"
+        f"回踩主多 {len(intraday_dip_reversal)} 个，"
         f"反手空观察 {len(overheat_failure_short)} 个；"
         f"观察雷达 {len(radar_watch)} 个，禁区池 {len(danger_pool)} 个。"
         f"行动倾向：{action_bias}；不满足触发就不做。"
@@ -1267,8 +1267,8 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     if has_playbook_buckets:
         lines += [
             "",
-            f"▌ 交易剧本A｜主多｜轮动承接 (共{len(premarket_open_sell)}只)",
-            "规则：三把锁确认 + AI赛道轮动 + 盘前/开盘承接强；不延续就卖，不恋战。",
+            f"▌ 交易剧本A｜主多｜开盘强承接 (共{len(premarket_open_sell)}只)",
+            "规则：三把锁确认 + AI赛道轮动 + 盘前/开盘承接强；适合盯开盘强延续，不延续就卖。",
         ]
         if premarket_open_sell:
             for idx, item in enumerate(premarket_open_sell, start=1):
@@ -1278,8 +1278,8 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
 
         lines += [
             "",
-            f"▌ 交易剧本B｜回踩多｜强势回落 (共{len(intraday_dip_reversal)}只)",
-            "规则：只买跌到支撑/VWAP/开盘区间附近且不破的回落；没承接不做。",
+            f"▌ 交易剧本B｜主多｜回踩承接 (共{len(intraday_dip_reversal)}只)",
+            "规则：同样是主多，但不追开盘；只买跌到支撑/VWAP/开盘区间附近且不破的回落。",
         ]
         if intraday_dip_reversal:
             for idx, item in enumerate(intraday_dip_reversal, start=1):

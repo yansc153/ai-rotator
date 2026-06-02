@@ -329,7 +329,7 @@ def test_evening_watchlist_fills_from_candidate_set_to_five():
 
 def test_evening_watchlist_text_uses_layers_not_entry_command():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "交易剧本B｜回踩多｜强势回落" in text
+    assert "交易剧本B｜主多｜回踩承接" in text
     assert "尾盘或次日盘前卖" in text
     assert "买入 " not in text
 
@@ -349,8 +349,8 @@ def test_evening_omits_bottleneck_from_payload_and_text():
 def test_evening_renders_decision_sections_and_preserves_watchlist():
     text = _build_text_with_fixtures("2026-05-05", "evening")
     assert "30秒决策版" in text
-    assert "交易剧本A｜主多｜轮动承接" in text
-    assert "交易剧本B｜回踩多｜强势回落" in text
+    assert "交易剧本A｜主多｜开盘强承接" in text
+    assert "交易剧本B｜主多｜回踩承接" in text
     assert "交易剧本C｜反手空｜过热失败" in text
     assert "交易剧本D｜雷达｜高波动观察" in text
     assert "关键映射链" in text
@@ -425,8 +425,8 @@ def test_brief_renders_market_coverage_watchlist():
 
 def test_morning_now_renders_short_and_swing_blocks():
     text = _build_text_with_fixtures("2026-05-05", "morning")
-    assert "交易剧本A｜主多｜轮动承接" in text
-    assert "交易剧本B｜回踩多｜强势回落" in text
+    assert "交易剧本A｜主多｜开盘强承接" in text
+    assert "交易剧本B｜主多｜回踩承接" in text
     assert "短线 1-2天" not in text
 
 
