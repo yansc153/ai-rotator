@@ -1004,7 +1004,8 @@ def test_morning_watch_only_does_not_render_trade_plan_levels():
     assert "等待触发｜A股·科创板" in text
     assert "买入 116.00" not in text
     assert "止损 112.00" not in text
-    assert "等：强势板块里的强标的" in text
+    assert "因：强势板块里的强标的" in text
+    assert "盯：等待开盘后 15m 放量站稳" in text
 
 
 def test_evening_does_not_render_executable_trade_levels_for_stx_style_gap():
@@ -1056,6 +1057,8 @@ def test_evening_does_not_render_executable_trade_levels_for_stx_style_gap():
     assert "止损 862.52" not in text
     assert "STX" in text
     assert "现价 1105.11" in text
+    assert "盯：开盘后 15m 站稳" in text
+    assert "放弃" in text
 
 
 def test_data_limited_earnings_title_changes():

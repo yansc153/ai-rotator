@@ -515,6 +515,44 @@ def _fmt_targets(item: dict[str, Any]) -> str:
     return f"卖出/减仓：未生成｜算法 {source}"
 
 
+def _watch_plan_lines(item: dict[str, Any], session: str) -> list[str]:
+    current = float(item.get("intraday_current_price") or item.get("current_price") or 0.0)
+    if current <= 0:
+        return ["盯：等待开盘后 15m 放量站稳；不延续就放弃"]
+
+    levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
+    source = str(levels.get("price_source") or item.get("price_source") or "")
+    buy = float(levels.get("buy_level") or 0.0)
+    confirm = float(levels.get("confirm_buy") or 0.0)
+    invalid = float(levels.get("stop_loss") or 0.0)
+    usable_levels = source in TRADE_LEVEL_PRICE_SOURCES and buy > 0 and abs(current - buy) / current <= 0.08
+
+    # ponytail: watch-only still needs a plan; use live-price bands when formal levels are not trusted.
+    if not usable_levels:
+        buy = current * 0.995
+        confirm = current * 1.006
+        invalid = current * 0.97
+        source = "live_price_band"
+
+    targets = []
+    target_plan = item.get("target_plan") if isinstance(item.get("target_plan"), dict) else {}
+    for row in target_plan.get("targets", []) if isinstance(target_plan.get("targets"), list) else []:
+        price = float(row.get("price") or row.get("target") or 0.0)
+        if current < price <= current * 1.25:
+            targets.append(f"{row.get('label', 'T')} {_fmt_price(price)}")
+        if len(targets) == 2:
+            break
+    if not targets:
+        targets = [f"T1 {_fmt_price(current * 1.025)}", f"T2 {_fmt_price(current * 1.05)}"]
+
+    trigger_word = "开盘后" if session in {"morning", "ah_open", "evening"} else "盘中"
+    return [
+        f"盯：{trigger_word} 15m 站稳 {_fmt_price(confirm)}，且不能快速跌回现价下方",
+        f"回踩：{_fmt_price(buy)} 附近守住才继续看；跌破 {_fmt_price(invalid)} 放弃",
+        f"目标区：{'；'.join(targets)}｜来源 {source}｜周期 0.5-2h",
+    ]
+
+
 def _holding_plan(session: str) -> str:
     if session in {"morning", "ah_open"}:
         return "开盘后 15m 触发，预计 0.5-2h；未触发不做"
@@ -1479,7 +1517,8 @@ def _fmt_bucket_item(item: dict[str, Any], session: str = "morning") -> str:
     return (
         f"{item.get('symbol')} {name} [{board}]"
         f"\n   {concept}｜AI：{ai_rel}｜现价 {_fmt_price(item.get('current_price'))}{suffix}"
-        f"\n   等：{reason if reason else '新触发'}"
+        f"\n   因：{reason if reason else '进入当日强弱筛选'}"
+        f"\n   " + "\n   ".join(_watch_plan_lines(item, session))
     )
 
 
