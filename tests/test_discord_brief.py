@@ -948,6 +948,61 @@ def test_brief_renders_up_to_ten_trade_plan_names():
     assert "周期：15m级别，预计 0.5-2h；目标/止损先到先处理" in text
 
 
+def test_morning_watch_only_can_render_preopen_trade_plan_levels():
+    item = {
+        "symbol": "688256.SH",
+        "market": "CN",
+        "company_name": "寒武纪",
+        "sector": "AI芯片",
+        "execution_score": 50.0,
+        "push_decision": "watch_only",
+        "reason": "强势板块里的强标的，开盘后 15m 继续承接才执行",
+        "market_board": "A股·科创板",
+        "company_concept": "AI芯片",
+        "ai_relationship": "核心/直接 AI",
+        "concept_verified": True,
+        "market_cap_ok": True,
+        "daily_allowed": True,
+        "risk_levels_complete": True,
+        "trade_language_allowed": False,
+        "trade_levels": {
+            "buy_level": 116.0,
+            "confirm_buy": 125.0,
+            "add_level": 128.0,
+            "stop_loss": 112.0,
+        },
+        "target_plan": {
+            "target_source": "prior_high",
+            "targets": [
+                {"label": "T1", "price": 132.0, "reason": "前高/日线压力"},
+                {"label": "T2", "price": 138.0, "reason": "压力突破后一倍 ATR"},
+            ],
+        },
+    }
+    payload = {
+        "date": "2026-05-05",
+        "session": "morning",
+        "leaders": ["AI芯片"],
+        "fresh_gate": {"ok": True},
+        "status_only": False,
+        "opportunity_buckets": {
+            "premarket_open_sell": [item],
+            "intraday_dip_reversal": [],
+            "overheat_failure_short": [],
+        },
+        "short_block": [],
+        "swing_block": [],
+        "coverage_watch": [],
+    }
+
+    text = build_brief_text("2026-05-05", "morning", payload=payload)
+
+    assert "今日交易计划｜A股·科创板" in text
+    assert "买入 116.00｜确认 125.00｜加仓 128.00｜止损 112.00" in text
+    assert "卖出/减仓：T1 132.00（前高/日线压力）；T2 138.00（压力突破后一倍 ATR）｜算法 prior_high" in text
+    assert "周期：开盘后 15m 触发，预计 0.5-2h；未触发不做" in text
+
+
 def test_data_limited_earnings_title_changes():
     payloads = _fake_rotation_payloads()
 

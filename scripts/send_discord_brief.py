@@ -523,6 +523,21 @@ def _holding_plan(session: str) -> str:
     return "15m级别，预计 0.5-2h"
 
 
+def _can_render_trade_plan(item: dict[str, Any], session: str) -> bool:
+    if item.get("trade_language_allowed") and item.get("push_decision") == "tradable_now":
+        return True
+    if session not in {"morning", "ah_open"} or item.get("push_decision") == "rejected":
+        return False
+    return all(
+        [
+            item.get("concept_verified"),
+            item.get("market_cap_ok", True),
+            item.get("daily_allowed"),
+            item.get("risk_levels_complete"),
+        ]
+    )
+
+
 def _resolve_a_stock_board(symbol: str, market_board: str | None, market: str) -> str:
     if market_board and str(market_board).strip():
         return str(market_board)
@@ -609,7 +624,7 @@ def _board_sections(items: list[dict[str, Any]], session: str) -> list[tuple[str
     ordered: list[tuple[str, list[dict[str, Any]]]] = []
     for key in keys:
         ordered_items = sorted(groups[key], key=lambda item: float(item.get("execution_score", 0.0) or 0.0), reverse=True)
-        title = "今日交易计划" if any(item.get("trade_language_allowed") for item in ordered_items) else "等待触发"
+        title = "今日交易计划" if any(_can_render_trade_plan(item, session) for item in ordered_items) else "等待触发"
         ordered.append((f"{title}｜{key}", ordered_items))
     return ordered
 
@@ -1433,7 +1448,7 @@ def _fmt_bucket_item(item: dict[str, Any], session: str = "morning") -> str:
     reason = str(item.get("reason", "")).strip()
     concept = item.get("company_concept") or sec
     ai_rel = item.get("ai_relationship") or "AI 关系待核验"
-    if item.get("trade_language_allowed") and item.get("push_decision") == "tradable_now":
+    if _can_render_trade_plan(item, session):
         levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
         target_line = _fmt_targets(item)
         level_line = f"买入 {_fmt_price(levels.get('buy_level'))}｜确认 {_fmt_price(levels.get('confirm_buy'))}｜加仓 {_fmt_price(levels.get('add_level'))}｜止损 {_fmt_price(levels.get('stop_loss'))}"
