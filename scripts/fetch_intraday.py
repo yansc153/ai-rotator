@@ -1,11 +1,11 @@
-"""Fetch 1-hour intraday OHLCV bars for screened candidate symbols.
+"""Fetch intraday OHLCV bars for screened candidate symbols.
 
 Source of symbols:
     1. data/candidates.json  — top screened universe from screen_candidates.py
 
 Saves as:  data/raw/US_NVDA_1h.csv
-           data/raw/CN_688256_1h.csv
-           data/raw/HK_00020_1h.csv
+           data/raw/CN_688256_15m.csv
+           data/raw/HK_00020_15m.csv
 
 Run before each Discord brief so session-aware scoring has fresh intraday data.
 """
@@ -29,7 +29,7 @@ CANDIDATES_JSON = ROOT / "data" / "candidates.json"
 RAW_DIR = RAW_DATA_DIR
 ensure_runtime_dirs()
 
-_START_DAYS = 7  # pull last 7 calendar days of 1h bars
+_START_DAYS = 7  # pull last 7 calendar days of intraday bars
 _AKSHARE_SLEEP = 1.2  # seconds between akshare intraday calls to avoid rate limits
 _US_TIMEOUT_S = 10
 _US_PREFLIGHT_TIMEOUT_S = 5
@@ -121,7 +121,7 @@ def fetch_cn_intraday(symbol: str) -> bool:
         time.sleep(_AKSHARE_SLEEP)
         try:
             df = ak.stock_zh_a_hist_min_em(
-                symbol=raw, period="60",
+                symbol=raw, period="15",
                 start_date=start, end_date=end,
                 adjust="qfq",
             )
@@ -133,9 +133,9 @@ def fetch_cn_intraday(symbol: str) -> bool:
                 "最高": "high", "最低": "low", "成交量": "volume",
             })
             df["datetime"] = df["datetime"].astype(str)
-            out = RAW_DIR / f"CN_{raw}_1h.csv"
+            out = RAW_DIR / f"CN_{raw}_15m.csv"
             df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-            print(f"  CN {raw}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            print(f"  CN {raw}: {len(df)} 15m bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
             return True
         except Exception as exc:
             last_exc = exc
@@ -157,7 +157,7 @@ def fetch_hk_intraday(symbol: str) -> bool:
         time.sleep(_AKSHARE_SLEEP)
         try:
             df = ak.stock_hk_hist_min_em(
-                symbol=base, period="60",
+                symbol=base, period="15",
                 start_date=start, end_date=end,
                 adjust="qfq",
             )
@@ -169,9 +169,9 @@ def fetch_hk_intraday(symbol: str) -> bool:
                 "最高": "high", "最低": "low", "成交量": "volume",
             })
             df["datetime"] = df["datetime"].astype(str)
-            out = RAW_DIR / f"HK_{base}_1h.csv"
+            out = RAW_DIR / f"HK_{base}_15m.csv"
             df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-            print(f"  HK {base}: {len(df)} 1h bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            print(f"  HK {base}: {len(df)} 15m bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
             return True
         except Exception as exc:
             last_exc = exc

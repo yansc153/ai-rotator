@@ -98,6 +98,46 @@ def test_tail_close_fails_fast_when_intraday_source_is_down(monkeypatch, capsys)
     assert "intraday source unavailable" in capsys.readouterr().out
 
 
+def test_fetch_cn_intraday_writes_15m_file(monkeypatch, tmp_path):
+    import pandas as pd
+    import akshare as ak
+
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame(
+            {"时间": ["2026-06-18 14:15:00"], "开盘": [1.0], "最高": [1.1], "最低": [0.9], "收盘": [1.05], "成交量": [100]}
+        )
+
+    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(ak, "stock_zh_a_hist_min_em", fake_fetch)
+
+    assert intraday.fetch_cn_intraday("688256.SH") is True
+    assert captured["period"] == "15"
+    assert (tmp_path / "CN_688256_15m.csv").exists()
+
+
+def test_fetch_hk_intraday_writes_15m_file(monkeypatch, tmp_path):
+    import pandas as pd
+    import akshare as ak
+
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame(
+            {"时间": ["2026-06-18 14:15:00"], "开盘": [1.0], "最高": [1.1], "最低": [0.9], "收盘": [1.05], "成交量": [100]}
+        )
+
+    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(ak, "stock_hk_hist_min_em", fake_fetch)
+
+    assert intraday.fetch_hk_intraday("0020.HK") is True
+    assert captured["period"] == "15"
+    assert (tmp_path / "HK_00020_15m.csv").exists()
+
+
 def test_fetch_us_intraday_falls_back_to_yfinance_with_timeout(monkeypatch):
     import pandas as pd
     import akshare as ak

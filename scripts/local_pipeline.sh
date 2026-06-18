@@ -112,7 +112,7 @@ case "$SESSION" in
     # This is the hard freshness gate. Intraday overlay remains best-effort only.
     run_critical_step "Fetch daily OHLCV (midday refresh)"    "cd $SCRIPTS && python3 fetch_all_daily.py --session midday"
     run_critical_step "Re-score candidates (fresh cache)"     "cd $SCRIPTS && python3 screen_candidates.py"
-    run_step "Fetch 1h intraday bars (midday refresh)"       "cd $SCRIPTS && python3 fetch_intraday.py --session midday"
+    run_step "Fetch 15m intraday bars (midday refresh)"      "cd $SCRIPTS && python3 fetch_intraday.py --session midday"
     run_critical_step "Build US rotation report"             "cd $SCRIPTS && python3 run_daily_rotation.py --market US"
     run_critical_step "Build AH rotation report"             "cd $SCRIPTS && python3 run_daily_rotation.py --market AH"
     run_critical_step "Send 盘中播报 to Discord"             "cd $SCRIPTS && python3 send_discord_brief.py --session midday"
@@ -123,7 +123,7 @@ case "$SESSION" in
     # fresh intraday data in session_rules, then send only gated trade cards.
     run_critical_step "Fetch daily OHLCV (tail refresh)"      "cd $SCRIPTS && python3 fetch_all_daily.py --session tail_close"
     run_critical_step "Re-score candidates (tail cache)"      "cd $SCRIPTS && python3 screen_candidates.py"
-    run_step "Fetch 1h intraday bars (tail refresh)"          "cd $SCRIPTS && python3 fetch_intraday.py --session tail_close"
+    run_step "Fetch 15m intraday bars (tail refresh)"         "cd $SCRIPTS && python3 fetch_intraday.py --session tail_close"
     run_critical_step "Build US rotation report"              "cd $SCRIPTS && python3 run_daily_rotation.py --market US"
     run_critical_step "Build AH rotation report"              "cd $SCRIPTS && python3 run_daily_rotation.py --market AH"
     run_critical_step "Send 尾盘确认 to Discord"               "cd $SCRIPTS && python3 send_discord_brief.py --session tail_close"

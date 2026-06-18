@@ -185,7 +185,7 @@ def test_confirmed_three_locks_adds_weight_but_does_not_override_scope():
     assert decision["execution_score"] < candidate["_session_score"]
 
 
-def test_midday_intraday_bar_time_cutoff_marks_stale(tmp_path, monkeypatch):
+def test_midday_uses_15m_intraday_bar_time_cutoff(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     monkeypatch.setattr("tradingagents.agents.rotation.execution_filter.RAW_DATA_DIR", raw_dir)
@@ -196,7 +196,7 @@ def test_midday_intraday_bar_time_cutoff_marks_stale(tmp_path, monkeypatch):
             {"datetime": "2026-06-18 09:30:00", "open": 12.0, "high": 12.2, "low": 11.8, "close": 11.9, "volume": 1000},
         ]
     )
-    early.to_csv(raw_dir / f"CN_{file_key}_1h.csv", index=False)
+    early.to_csv(raw_dir / f"CN_{file_key}_15m.csv", index=False)
     record = build_freshness_record("CN", symbol, "midday", "2026-06-18")
     assert record.intraday_status == "stale"
 
@@ -206,7 +206,7 @@ def test_midday_intraday_bar_time_cutoff_marks_stale(tmp_path, monkeypatch):
             {"datetime": "2026-06-18 14:05:00", "open": 12.0, "high": 12.8, "low": 11.8, "close": 12.4, "volume": 1200},
         ]
     )
-    late.to_csv(raw_dir / f"CN_{file_key}_1h.csv", index=False)
+    late.to_csv(raw_dir / f"CN_{file_key}_15m.csv", index=False)
     record = build_freshness_record("CN", symbol, "midday", "2026-06-18")
     assert record.intraday_status == "fresh"
 

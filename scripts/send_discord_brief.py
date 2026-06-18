@@ -51,7 +51,7 @@ def _session_meta(session: str) -> dict[str, Any]:
     return meta
 
 def _load_intraday_overlay(market: str, symbol: str, session: str = "morning") -> dict[str, float]:
-    """Return {ret_intraday, overextended} from latest 1h CSV for today.
+    """Return {ret_intraday, overextended} from latest intraday CSV for today.
 
     ret_intraday = (last_bar_close - first_bar_close_today) / first_bar_close_today
     Returns zeros if the file is missing or today has no bars (pre-open).
@@ -60,7 +60,8 @@ def _load_intraday_overlay(market: str, symbol: str, session: str = "morning") -
     from tradingagents.agents.rotation.common import RAW_DIR, normalize_symbol_for_file
 
     normalized = normalize_symbol_for_file(market, symbol)
-    path = RAW_DIR / f"{market}_{normalized}_1h.csv"
+    suffix = "15m" if session in {"midday", "tail_close"} and market in {"CN", "HK"} else "1h"
+    path = RAW_DIR / f"{market}_{normalized}_{suffix}.csv"
     if not path.exists():
         return {"ret_intraday": 0.0, "overextended": False}
     try:

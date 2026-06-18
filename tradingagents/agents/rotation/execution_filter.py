@@ -56,7 +56,8 @@ def session_meta(session: str) -> dict[str, Any]:
 
 def build_freshness_record(market: str, symbol: str, session: str, trade_date: str) -> FreshnessRecord:
     normalized = normalize_symbol_for_file(market, symbol)
-    path = RAW_DATA_DIR / f"{market}_{normalized}_1h.csv"
+    suffix = "15m" if session in {"midday", "tail_close"} and market in {"CN", "HK"} else "1h"
+    path = RAW_DATA_DIR / f"{market}_{normalized}_{suffix}.csv"
     source_path = str(path)
     if not path.exists():
         return FreshnessRecord(
