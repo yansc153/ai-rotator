@@ -1432,12 +1432,6 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
             "▌ 30秒决策版",
             market_state.get("summary", "等待最新数据确认。"),
         ]
-        if market_state.get("action_bias"):
-            lines.append(f"动作倾向：{market_state['action_bias']}")
-        if market_state.get("regime") or market_state.get("breadth") or market_state.get("mainline_health"):
-            lines.append(
-                f"市场状态：{market_state.get('regime','未知')} | 宽度：{market_state.get('breadth','未知')} | 主线：{market_state.get('mainline_health','未知')}"
-            )
         if payload.get("three_locks_summary"):
             lines.append(payload["three_locks_summary"])
 
