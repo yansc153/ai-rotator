@@ -39,6 +39,7 @@ _US_EASTMONEY_PREFIX = "105"
 SESSION_MARKETS = {
     "morning": {"CN", "HK", "US"},
     "midday": {"CN", "HK", "US"},
+    "tail_close": {"CN", "HK"},
     "evening": {"US"},
 }
 
@@ -48,6 +49,7 @@ SESSION_MARKETS = {
 SESSION_MAX_SYMBOLS = {
     "morning": 45,
     "midday": 40,
+    "tail_close": 40,
     "evening": 5,
 }
 
@@ -205,7 +207,7 @@ def _load_symbols(session: str | None = None, max_symbols: int | None = None) ->
 def main() -> None:
     load_env_file()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--session", choices=["morning", "midday", "evening"])
+    parser.add_argument("--session", choices=["morning", "midday", "tail_close", "evening"])
     parser.add_argument("--max-symbols", type=int, default=None)
     args = parser.parse_args()
 

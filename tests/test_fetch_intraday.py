@@ -32,6 +32,23 @@ def test_load_symbols_filters_evening_to_us(monkeypatch):
     assert result == [("US", "NVDA"), ("US", "AMD")]
 
 
+def test_load_symbols_filters_tail_close_to_cn_hk(monkeypatch):
+    payload = {
+        "candidates": [
+            {"market": "CN", "symbol": "688256.SH"},
+            {"market": "HK", "symbol": "0020.HK"},
+            {"market": "US", "symbol": "NVDA"},
+        ]
+    }
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "candidates.json"
+        path.write_text(json.dumps(payload))
+        monkeypatch.setattr(intraday, "CANDIDATES_JSON", path)
+        result = intraday._load_symbols(session="tail_close")
+
+    assert result == [("CN", "688256.SH"), ("HK", "0020.HK")]
+
+
 def test_load_symbols_applies_session_limit(monkeypatch):
     payload = {
         "candidates": [
