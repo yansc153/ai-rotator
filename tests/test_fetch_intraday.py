@@ -160,6 +160,7 @@ def test_fetch_cn_intraday_falls_back_to_yfinance(monkeypatch, tmp_path):
     captured = {}
 
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": 0, "HK": 0})
     monkeypatch.setattr(ak, "stock_zh_a_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("eastmoney down")))
 
     def fake_yfinance(market, symbol, output_symbol):
@@ -170,6 +171,17 @@ def test_fetch_cn_intraday_falls_back_to_yfinance(monkeypatch, tmp_path):
 
     assert intraday.fetch_cn_intraday("688256.SH") is True
     assert captured == {"market": "CN", "symbol": "688256.SH", "output_symbol": "688256"}
+
+
+def test_fetch_cn_intraday_skips_primary_after_consecutive_failures(monkeypatch, tmp_path):
+    import akshare as ak
+
+    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": intraday._PRIMARY_DISABLE_AFTER, "HK": 0})
+    monkeypatch.setattr(ak, "stock_zh_a_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(AssertionError("primary should be skipped")))
+    monkeypatch.setattr(intraday, "_fetch_yfinance_intraday", lambda market, symbol, output_symbol: True)
+
+    assert intraday.fetch_cn_intraday("688256.SH") is True
 
 
 def test_fetch_hk_intraday_writes_15m_file(monkeypatch, tmp_path):
@@ -198,6 +210,7 @@ def test_fetch_hk_intraday_falls_back_to_yfinance(monkeypatch, tmp_path):
     captured = {}
 
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": 0, "HK": 0})
     monkeypatch.setattr(ak, "stock_hk_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("eastmoney down")))
 
     def fake_yfinance(market, symbol, output_symbol):
@@ -208,6 +221,17 @@ def test_fetch_hk_intraday_falls_back_to_yfinance(monkeypatch, tmp_path):
 
     assert intraday.fetch_hk_intraday("0020.HK") is True
     assert captured == {"market": "HK", "symbol": "0020.HK", "output_symbol": "00020"}
+
+
+def test_fetch_hk_intraday_skips_primary_after_consecutive_failures(monkeypatch, tmp_path):
+    import akshare as ak
+
+    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": 0, "HK": intraday._PRIMARY_DISABLE_AFTER})
+    monkeypatch.setattr(ak, "stock_hk_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(AssertionError("primary should be skipped")))
+    monkeypatch.setattr(intraday, "_fetch_yfinance_intraday", lambda market, symbol, output_symbol: True)
+
+    assert intraday.fetch_hk_intraday("0020.HK") is True
 
 
 def test_yahoo_symbol_maps_cn_and_hk_codes():

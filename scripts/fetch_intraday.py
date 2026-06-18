@@ -40,6 +40,8 @@ _CNHK_RETRIES = 1
 _YF_CNHK_TIMEOUT_S = 10
 _US_EASTMONEY_PREFIX = "105"
 _FRESH_SESSION_FAIL_FAST_AFTER = 5
+_PRIMARY_DISABLE_AFTER = 3
+_CNHK_PRIMARY_FAILURES = {"CN": 0, "HK": 0}
 
 SESSION_MARKETS = {
     "morning": {"CN", "HK", "US"},
@@ -83,6 +85,18 @@ def _prefer_ipv4_for_requests() -> None:
     except Exception:
         return
     urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
+
+
+def _primary_is_disabled(market: str) -> bool:
+    return _CNHK_PRIMARY_FAILURES.get(market, 0) >= _PRIMARY_DISABLE_AFTER
+
+
+def _record_primary_failure(market: str) -> None:
+    _CNHK_PRIMARY_FAILURES[market] = _CNHK_PRIMARY_FAILURES.get(market, 0) + 1
+
+
+def _record_primary_success(market: str) -> None:
+    _CNHK_PRIMARY_FAILURES[market] = 0
 
 
 def _can_fetch_us_intraday() -> bool:
@@ -184,6 +198,9 @@ def fetch_cn_intraday(symbol: str) -> bool:
     end = date.today().strftime("%Y-%m-%d")
     last_exc: Exception | None = None
     for attempt in range(1, _CNHK_RETRIES + 1):
+        if _primary_is_disabled("CN"):
+            last_exc = RuntimeError("eastmoney primary disabled after consecutive failures")
+            break
         time.sleep(_AKSHARE_SLEEP)
         try:
             df = _run_with_timeout(
@@ -206,9 +223,11 @@ def fetch_cn_intraday(symbol: str) -> bool:
             out = RAW_DIR / f"CN_{raw}_15m.csv"
             df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
             print(f"  CN {raw}: {len(df)} 15m bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            _record_primary_success("CN")
             return True
         except Exception as exc:
             last_exc = exc
+            _record_primary_failure("CN")
             print(f"  CN {raw}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
     if _fetch_yfinance_intraday("CN", symbol, raw):
         return True
@@ -226,6 +245,9 @@ def fetch_hk_intraday(symbol: str) -> bool:
     end = date.today().strftime("%Y-%m-%d")
     last_exc: Exception | None = None
     for attempt in range(1, _CNHK_RETRIES + 1):
+        if _primary_is_disabled("HK"):
+            last_exc = RuntimeError("eastmoney primary disabled after consecutive failures")
+            break
         time.sleep(_AKSHARE_SLEEP)
         try:
             df = _run_with_timeout(
@@ -248,9 +270,11 @@ def fetch_hk_intraday(symbol: str) -> bool:
             out = RAW_DIR / f"HK_{base}_15m.csv"
             df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
             print(f"  HK {base}: {len(df)} 15m bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            _record_primary_success("HK")
             return True
         except Exception as exc:
             last_exc = exc
+            _record_primary_failure("HK")
             print(f"  HK {base}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
     if _fetch_yfinance_intraday("HK", symbol, base):
         return True
