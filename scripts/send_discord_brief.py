@@ -503,7 +503,8 @@ def _fmt_targets(item: dict[str, Any]) -> str:
     if not source:
         source = target_plan.get("method", "unavailable")
     if parts:
-        return f"卖出/减仓：{"；".join(parts)}｜算法 {source}"
+        joined = "；".join(parts)
+        return f"卖出/减仓：{joined}｜算法 {source}"
     return f"卖出/减仓：未生成｜算法 {source}"
 
 
