@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -33,6 +34,7 @@ _START_DAYS = 7  # pull last 7 calendar days of intraday bars
 _AKSHARE_SLEEP = 1.2  # seconds between akshare intraday calls to avoid rate limits
 _US_TIMEOUT_S = 10
 _US_PREFLIGHT_TIMEOUT_S = 5
+_CNHK_TIMEOUT_S = 15
 _CNHK_RETRIES = 1
 _US_EASTMONEY_PREFIX = "105"
 _FRESH_SESSION_FAIL_FAST_AFTER = 5
@@ -54,6 +56,23 @@ SESSION_MAX_SYMBOLS = {
     "tail_close": None,
     "evening": 5,
 }
+
+
+def _run_with_timeout(timeout_s: int, func, **kwargs):
+    if not hasattr(signal, "SIGALRM"):
+        return func(**kwargs)
+
+    def _raise_timeout(_signum, _frame):
+        raise TimeoutError(f"intraday source timed out after {timeout_s}s")
+
+    old_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.alarm(timeout_s)
+    try:
+        return func(**kwargs)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 def _can_fetch_us_intraday() -> bool:
@@ -120,9 +139,13 @@ def fetch_cn_intraday(symbol: str) -> bool:
     for attempt in range(1, _CNHK_RETRIES + 1):
         time.sleep(_AKSHARE_SLEEP)
         try:
-            df = ak.stock_zh_a_hist_min_em(
-                symbol=raw, period="15",
-                start_date=start, end_date=end,
+            df = _run_with_timeout(
+                _CNHK_TIMEOUT_S,
+                ak.stock_zh_a_hist_min_em,
+                symbol=raw,
+                period="15",
+                start_date=start,
+                end_date=end,
                 adjust="qfq",
             )
             if df is None or df.empty:
@@ -156,9 +179,13 @@ def fetch_hk_intraday(symbol: str) -> bool:
     for attempt in range(1, _CNHK_RETRIES + 1):
         time.sleep(_AKSHARE_SLEEP)
         try:
-            df = ak.stock_hk_hist_min_em(
-                symbol=base, period="15",
-                start_date=start, end_date=end,
+            df = _run_with_timeout(
+                _CNHK_TIMEOUT_S,
+                ak.stock_hk_hist_min_em,
+                symbol=base,
+                period="15",
+                start_date=start,
+                end_date=end,
                 adjust="qfq",
             )
             if df is None or df.empty:

@@ -118,6 +118,30 @@ def test_fetch_cn_intraday_writes_15m_file(monkeypatch, tmp_path):
     assert (tmp_path / "CN_688256_15m.csv").exists()
 
 
+def test_fetch_cn_intraday_wraps_source_timeout(monkeypatch, tmp_path):
+    import pandas as pd
+    import akshare as ak
+
+    captured = {}
+
+    def fake_timeout(timeout_s, func, **kwargs):
+        captured["timeout_s"] = timeout_s
+        return func(**kwargs)
+
+    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setattr(intraday, "_run_with_timeout", fake_timeout)
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_hist_min_em",
+        lambda **kwargs: pd.DataFrame(
+            {"时间": ["2026-06-18 14:15:00"], "开盘": [1.0], "最高": [1.1], "最低": [0.9], "收盘": [1.05], "成交量": [100]}
+        ),
+    )
+
+    assert intraday.fetch_cn_intraday("688256.SH") is True
+    assert captured["timeout_s"] == intraday._CNHK_TIMEOUT_S
+
+
 def test_fetch_hk_intraday_writes_15m_file(monkeypatch, tmp_path):
     import pandas as pd
     import akshare as ak
