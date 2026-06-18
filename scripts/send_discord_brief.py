@@ -1489,6 +1489,7 @@ def _fmt_bucket_item(item: dict[str, Any], session: str = "morning") -> str:
     reason = str(item.get("reason", "")).strip()
     concept = item.get("company_concept") or sec
     ai_rel = item.get("ai_relationship") or "AI 关系待核验"
+    display_price = item.get("intraday_current_price") or item.get("current_price")
     if _can_render_trade_plan(item, session):
         levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
         target_line = _fmt_targets(item)
@@ -1516,7 +1517,7 @@ def _fmt_bucket_item(item: dict[str, Any], session: str = "morning") -> str:
     suffix = f"｜{note_text}" if note_text else ""
     return (
         f"{item.get('symbol')} {name} [{board}]"
-        f"\n   {concept}｜AI：{ai_rel}｜现价 {_fmt_price(item.get('current_price'))}{suffix}"
+        f"\n   {concept}｜AI：{ai_rel}｜现价 {_fmt_price(display_price)}{suffix}"
         f"\n   因：{reason if reason else '进入当日强弱筛选'}"
         f"\n   " + "\n   ".join(_watch_plan_lines(item, session))
     )
