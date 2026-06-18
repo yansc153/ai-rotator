@@ -15,6 +15,7 @@ from tradingagents.agents.rotation.execution_filter import (
     build_freshness_record,
     classify_candidate,
 )
+import tradingagents.agents.rotation.execution_filter as execution_filter
 
 
 def _base_candidate(**overrides):
@@ -40,6 +41,19 @@ def _base_candidate(**overrides):
 def test_build_freshness_record_missing_file():
     record = build_freshness_record("US", "NVDA", "midday", "2026-05-05")
     assert record.intraday_status in {"missing", "fresh", "stale", "failed"}
+
+
+def test_us_freshness_record_uses_15m_file(tmp_path, monkeypatch):
+    (tmp_path / "US_NVDA_15m.csv").write_text(
+        "datetime,open,high,low,close,volume\n"
+        "2026-05-05 15:45:00,1,2,1,2,100\n"
+    )
+    monkeypatch.setattr(execution_filter, "RAW_DATA_DIR", tmp_path)
+
+    record = build_freshness_record("US", "NVDA", "evening", "2026-05-05")
+
+    assert record.intraday_status == "fresh"
+    assert record.source_path.endswith("US_NVDA_15m.csv")
 
 
 def test_midday_missing_intraday_downgrades_to_watch_only():

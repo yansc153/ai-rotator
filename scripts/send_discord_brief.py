@@ -60,7 +60,7 @@ def _load_intraday_overlay(market: str, symbol: str, session: str = "morning") -
     from tradingagents.agents.rotation.common import RAW_DIR, normalize_symbol_for_file
 
     normalized = normalize_symbol_for_file(market, symbol)
-    suffix = "15m" if session in {"midday", "tail_close"} and market in {"CN", "HK"} else "1h"
+    suffix = "15m" if market in {"CN", "HK", "US"} else "1h"
     path = RAW_DIR / f"{market}_{normalized}_{suffix}.csv"
     if not path.exists():
         return {"ret_intraday": 0.0, "overextended": False}
@@ -154,8 +154,8 @@ def _sector_cn(code: str) -> str:
 
 DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
-PLAYBOOK_RENDER_LIMIT = 3
-DANGER_RENDER_LIMIT = 3
+PLAYBOOK_RENDER_LIMIT = 2
+DANGER_RENDER_LIMIT = 1
 THREE_LOCK_LABELS = {
     "triple_lock": "日线强确认",
     "double_lock": "日线确认",

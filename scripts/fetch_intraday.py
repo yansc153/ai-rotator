@@ -3,7 +3,7 @@
 Source of symbols:
     1. data/candidates.json  — top screened universe from screen_candidates.py
 
-Saves as:  data/raw/US_NVDA_1h.csv
+Saves as:  data/raw/US_NVDA_15m.csv
            data/raw/CN_688256_15m.csv
            data/raw/HK_00020_15m.csv
 
@@ -126,16 +126,16 @@ def fetch_us_intraday(symbol: str) -> bool:
                 "成交量": "volume",
             })
             df["datetime"] = df["datetime"].astype(str)
-            out = RAW_DIR / f"US_{symbol}_1h.csv"
+            out = RAW_DIR / f"US_{symbol}_15m.csv"
             df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-            print(f"  US {symbol}: {len(df)} 1h bars via eastmoney, latest={df['close'].iloc[-1]:.2f}", flush=True)
+            print(f"  US {symbol}: {len(df)} 15m bars via eastmoney, latest={df['close'].iloc[-1]:.2f}", flush=True)
             return True
     except Exception as exc:
         print(f"  US {symbol}: eastmoney failed — {exc}", flush=True)
 
     ticker = yf.Ticker(symbol)
     try:
-        df = ticker.history(period="5d", interval="1h", auto_adjust=True, timeout=_US_TIMEOUT_S, prepost=True)
+        df = ticker.history(period="5d", interval="15m", auto_adjust=True, timeout=_US_TIMEOUT_S, prepost=True)
         if df.empty:
             return False
         df = df.reset_index()
@@ -143,9 +143,9 @@ def fetch_us_intraday(symbol: str) -> bool:
         dt_col = "datetime" if "datetime" in df.columns else "date"
         df = df.rename(columns={dt_col: "datetime"})
         df["datetime"] = df["datetime"].astype(str).str[:19]
-        out = RAW_DIR / f"US_{symbol}_1h.csv"
+        out = RAW_DIR / f"US_{symbol}_15m.csv"
         df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-        print(f"  US {symbol}: {len(df)} 1h bars via yfinance, latest={df['close'].iloc[-1]:.2f}", flush=True)
+        print(f"  US {symbol}: {len(df)} 15m bars via yfinance, latest={df['close'].iloc[-1]:.2f}", flush=True)
         return True
     except Exception as exc:
         print(f"  US {symbol}: FAILED — {exc}", flush=True)

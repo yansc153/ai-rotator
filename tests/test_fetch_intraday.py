@@ -241,7 +241,7 @@ def test_yahoo_symbol_maps_cn_and_hk_codes():
     assert intraday._yahoo_symbol("HK", "0020.HK") == "0020.HK"
 
 
-def test_fetch_us_intraday_falls_back_to_yfinance_with_timeout(monkeypatch):
+def test_fetch_us_intraday_falls_back_to_yfinance_with_timeout(monkeypatch, tmp_path):
     import pandas as pd
     import akshare as ak
     import yfinance as yf
@@ -257,8 +257,11 @@ def test_fetch_us_intraday_falls_back_to_yfinance_with_timeout(monkeypatch):
 
     monkeypatch.setattr(ak, "stock_us_hist_min_em", lambda symbol: (_ for _ in ()).throw(RuntimeError("eastmoney blocked")))
     monkeypatch.setattr(yf, "Ticker", lambda symbol: FakeTicker())
+    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
     assert intraday.fetch_us_intraday("NVDA") is True
     assert captured["kwargs"]["timeout"] == intraday._US_TIMEOUT_S
+    assert captured["kwargs"]["interval"] == "15m"
+    assert (tmp_path / "US_NVDA_15m.csv").exists()
 
 
 def test_can_fetch_us_intraday_returns_false_on_exception(monkeypatch):

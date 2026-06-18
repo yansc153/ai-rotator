@@ -124,7 +124,7 @@ sessions:
     intraday_weight: 0.4
     overbought_5d: 0.30
     overextended_intraday: 0.05
-    require_fresh_intraday: false
+    require_fresh_intraday: true
     require_active_sector_for_short: true
     structure_only_min_score: 48.5
     structure_only_max_rank: 3
