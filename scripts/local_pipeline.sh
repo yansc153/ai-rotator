@@ -52,9 +52,9 @@ elif [ -f "$HOME/.venv/bin/activate" ]; then
 fi
 
 # Ensure dependencies are importable
-python3 -c "import yfinance, akshare, pandas, yaml" 2>/dev/null || {
+python3 -c "import yfinance, mootdx, pandas, yaml" 2>/dev/null || {
   echo "[INFO] Installing dependencies..."
-  pip3 install -q yfinance akshare pandas pyyaml certifi requests
+  pip3 install -q yfinance mootdx pandas pyyaml certifi requests
 }
 
 cd "$REPO_DIR"
@@ -99,7 +99,7 @@ case "$SESSION" in
     run_critical_step "Fetch daily OHLCV (all 3357 stocks)"  "cd $SCRIPTS && python3 fetch_all_daily.py --session morning"
     run_critical_step "Score and screen candidates"           "cd $SCRIPTS && python3 screen_candidates.py"
     run_step "Screen earnings plays (next 7 days)"            "cd $SCRIPTS && python3 fetch_earnings_plays.py"
-    # Intraday bars: best-effort (yfinance/akshare may be blocked in CN).
+    # Intraday bars: best-effort (Yahoo/mootdx may be blocked by network).
     # Morning intraday_weight=0 so missing data has zero scoring impact,
     # but running it here seeds the CSV cache for midday/evening use.
     run_step "Fetch 1h intraday bars (seed cache)"           "cd $SCRIPTS && python3 fetch_intraday.py --session morning"

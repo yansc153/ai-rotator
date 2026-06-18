@@ -16,13 +16,13 @@ import json
 import signal
 import socket
 import sys
-from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _common import PROJECT_ROOT, load_env_file
 from tradingagents.agents.rotation.common import normalize_symbol_for_file
+from tradingagents.data_sources import skill_market_data
 from tradingagents.runtime.paths import RAW_DATA_DIR, ensure_runtime_dirs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,17 +31,10 @@ CANDIDATES_JSON = ROOT / "data" / "candidates.json"
 RAW_DIR = RAW_DATA_DIR
 ensure_runtime_dirs()
 
-_START_DAYS = 7  # pull last 7 calendar days of intraday bars
-_AKSHARE_SLEEP = 1.2  # seconds between akshare intraday calls to avoid rate limits
 _US_TIMEOUT_S = 10
 _US_PREFLIGHT_TIMEOUT_S = 5
 _CNHK_TIMEOUT_S = 15
-_CNHK_RETRIES = 1
-_YF_CNHK_TIMEOUT_S = 10
-_US_EASTMONEY_PREFIX = "105"
 _FRESH_SESSION_FAIL_FAST_AFTER = 5
-_PRIMARY_DISABLE_AFTER = 3
-_CNHK_PRIMARY_FAILURES = {"CN": 0, "HK": 0}
 
 SESSION_MARKETS = {
     "morning": {"CN", "HK", "US"},
@@ -89,66 +82,31 @@ def _prefer_ipv4_for_requests() -> None:
     urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 
-def _primary_is_disabled(market: str) -> bool:
-    return _CNHK_PRIMARY_FAILURES.get(market, 0) >= _PRIMARY_DISABLE_AFTER
+def _write_rows(market: str, output_symbol: str, rows: list[dict], source: str) -> bool:
+    import pandas as pd
 
-
-def _record_primary_failure(market: str) -> None:
-    _CNHK_PRIMARY_FAILURES[market] = _CNHK_PRIMARY_FAILURES.get(market, 0) + 1
-
-
-def _record_primary_success(market: str) -> None:
-    _CNHK_PRIMARY_FAILURES[market] = 0
+    if not rows:
+        return False
+    df = pd.DataFrame(rows).rename(columns={"date": "datetime"})
+    required = ["datetime", "open", "high", "low", "close", "volume"]
+    if any(col not in df.columns for col in required):
+        return False
+    out = RAW_DIR / f"{market}_{output_symbol}_15m.csv"
+    df[required].to_csv(out, index=False)
+    print(f"  {market} {output_symbol}: {len(df)} 15m bars via {source}, latest={df['close'].iloc[-1]:.2f}", flush=True)
+    return True
 
 
 def _can_fetch_us_intraday() -> bool:
     try:
-        import akshare as ak
-
-        df = ak.stock_us_hist_min_em(symbol=f"{_US_EASTMONEY_PREFIX}.AAPL")
-        return df is not None and not df.empty
+        return bool(skill_market_data.yahoo_chart("AAPL", interval="15m", range_="1d", timeout=_US_PREFLIGHT_TIMEOUT_S))
     except Exception:
         return False
 
 
 def fetch_us_intraday(symbol: str) -> bool:
-    import akshare as ak
-    import yfinance as yf
-
-    eastmoney_symbol = f"{_US_EASTMONEY_PREFIX}.{symbol}"
     try:
-        df = ak.stock_us_hist_min_em(symbol=eastmoney_symbol)
-        if df is not None and not df.empty:
-            df = df.rename(columns={
-                "时间": "datetime",
-                "开盘": "open",
-                "收盘": "close",
-                "最高": "high",
-                "最低": "low",
-                "成交量": "volume",
-            })
-            df["datetime"] = df["datetime"].astype(str)
-            out = RAW_DIR / f"US_{symbol}_15m.csv"
-            df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-            print(f"  US {symbol}: {len(df)} 15m bars via eastmoney, latest={df['close'].iloc[-1]:.2f}", flush=True)
-            return True
-    except Exception as exc:
-        print(f"  US {symbol}: eastmoney failed — {exc}", flush=True)
-
-    ticker = yf.Ticker(symbol)
-    try:
-        df = ticker.history(period="5d", interval="15m", auto_adjust=True, timeout=_US_TIMEOUT_S, prepost=True)
-        if df.empty:
-            return False
-        df = df.reset_index()
-        df.columns = [c.lower() for c in df.columns]
-        dt_col = "datetime" if "datetime" in df.columns else "date"
-        df = df.rename(columns={dt_col: "datetime"})
-        df["datetime"] = df["datetime"].astype(str).str[:19]
-        out = RAW_DIR / f"US_{symbol}_15m.csv"
-        df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-        print(f"  US {symbol}: {len(df)} 15m bars via yfinance, latest={df['close'].iloc[-1]:.2f}", flush=True)
-        return True
+        return _write_rows("US", symbol, skill_market_data.yahoo_chart(symbol, interval="15m", range_="5d", timeout=_US_TIMEOUT_S), "yahoo_chart")
     except Exception as exc:
         print(f"  US {symbol}: FAILED — {exc}", flush=True)
         return False
@@ -166,122 +124,23 @@ def _yahoo_symbol(market: str, symbol: str) -> str:
     return symbol
 
 
-def _fetch_yfinance_intraday(market: str, symbol: str, output_symbol: str) -> bool:
-    import yfinance as yf
-
-    ticker = yf.Ticker(_yahoo_symbol(market, symbol))
-    try:
-        df = ticker.history(period="5d", interval="15m", auto_adjust=True, timeout=_YF_CNHK_TIMEOUT_S, prepost=False)
-        if df.empty:
-            return False
-        df = df.reset_index()
-        df.columns = [str(c).lower() for c in df.columns]
-        dt_col = "datetime" if "datetime" in df.columns else "date"
-        df = df.rename(columns={dt_col: "datetime"})
-        required = ["datetime", "open", "high", "low", "close", "volume"]
-        if any(col not in df.columns for col in required):
-            return False
-        df["datetime"] = df["datetime"].astype(str).str[:19]
-        out = RAW_DIR / f"{market}_{output_symbol}_15m.csv"
-        df[required].to_csv(out, index=False)
-        print(f"  {market} {output_symbol}: {len(df)} 15m bars via yfinance, latest={df['close'].iloc[-1]:.2f}", flush=True)
-        return True
-    except Exception as exc:
-        print(f"  {market} {output_symbol}: yfinance fallback failed — {exc}", flush=True)
-        return False
-
-
 def fetch_cn_intraday(symbol: str) -> bool:
-    import time
-    import akshare as ak
-
     raw = symbol.split(".")[0]
-    start = (date.today() - timedelta(days=_START_DAYS)).strftime("%Y-%m-%d")
-    end = date.today().strftime("%Y-%m-%d")
-    last_exc: Exception | None = None
-    for attempt in range(1, _CNHK_RETRIES + 1):
-        if _primary_is_disabled("CN"):
-            last_exc = RuntimeError("eastmoney primary disabled after consecutive failures")
-            break
-        time.sleep(_AKSHARE_SLEEP)
-        try:
-            df = _run_with_timeout(
-                _CNHK_TIMEOUT_S,
-                ak.stock_zh_a_hist_min_em,
-                symbol=raw,
-                period="15",
-                start_date=start,
-                end_date=end,
-                adjust="qfq",
-            )
-            if df is None or df.empty:
-                last_exc = RuntimeError("empty intraday response")
-                continue
-            df = df.rename(columns={
-                "时间": "datetime", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-            })
-            df["datetime"] = df["datetime"].astype(str)
-            out = RAW_DIR / f"CN_{raw}_15m.csv"
-            df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-            print(f"  CN {raw}: {len(df)} 15m bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
-            _record_primary_success("CN")
-            return True
-        except Exception as exc:
-            last_exc = exc
-            _record_primary_failure("CN")
-            print(f"  CN {raw}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
-    if _fetch_yfinance_intraday("CN", symbol, raw):
-        return True
-    print(f"  CN {raw}: FAILED — {last_exc}", flush=True)
+    try:
+        rows = _run_with_timeout(_CNHK_TIMEOUT_S, skill_market_data.mootdx_cn_bars, code=raw, category=9, offset=120)
+        return _write_rows("CN", raw, rows, "mootdx")
+    except Exception as exc:
+        print(f"  CN {raw}: FAILED — {exc}", flush=True)
     return False
 
 
 def fetch_hk_intraday(symbol: str) -> bool:
-    import time
-    import akshare as ak
-
-    # akshare needs 5-digit zero-padded codes
     base = normalize_symbol_for_file("HK", symbol)
-    start = (date.today() - timedelta(days=_START_DAYS)).strftime("%Y-%m-%d")
-    end = date.today().strftime("%Y-%m-%d")
-    last_exc: Exception | None = None
-    for attempt in range(1, _CNHK_RETRIES + 1):
-        if _primary_is_disabled("HK"):
-            last_exc = RuntimeError("eastmoney primary disabled after consecutive failures")
-            break
-        time.sleep(_AKSHARE_SLEEP)
-        try:
-            df = _run_with_timeout(
-                _CNHK_TIMEOUT_S,
-                ak.stock_hk_hist_min_em,
-                symbol=base,
-                period="15",
-                start_date=start,
-                end_date=end,
-                adjust="qfq",
-            )
-            if df is None or df.empty:
-                last_exc = RuntimeError("empty intraday response")
-                continue
-            df = df.rename(columns={
-                "时间": "datetime", "开盘": "open", "收盘": "close",
-                "最高": "high", "最低": "low", "成交量": "volume",
-            })
-            df["datetime"] = df["datetime"].astype(str)
-            out = RAW_DIR / f"HK_{base}_15m.csv"
-            df[["datetime", "open", "high", "low", "close", "volume"]].to_csv(out, index=False)
-            print(f"  HK {base}: {len(df)} 15m bars, latest={df['close'].iloc[-1]:.2f}", flush=True)
-            _record_primary_success("HK")
-            return True
-        except Exception as exc:
-            last_exc = exc
-            _record_primary_failure("HK")
-            print(f"  HK {base}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
-    if _fetch_yfinance_intraday("HK", symbol, base):
-        return True
-    print(f"  HK {base}: FAILED — {last_exc}", flush=True)
-    return False
+    try:
+        return _write_rows("HK", base, skill_market_data.yahoo_chart(_yahoo_symbol("HK", symbol), interval="15m", range_="5d", timeout=_CNHK_TIMEOUT_S), "yahoo_chart")
+    except Exception as exc:
+        print(f"  HK {base}: FAILED — {exc}", flush=True)
+        return False
 
 
 def _load_symbols(session: str | None = None, max_symbols: int | None = None) -> list[tuple[str, str]]:

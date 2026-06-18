@@ -128,29 +128,21 @@ def test_main_prefers_ipv4_before_fetching(monkeypatch):
 
 
 def test_fetch_cn_intraday_writes_15m_file(monkeypatch, tmp_path):
-    import pandas as pd
-    import akshare as ak
-
     captured = {}
 
     def fake_fetch(**kwargs):
         captured.update(kwargs)
-        return pd.DataFrame(
-            {"时间": ["2026-06-18 14:15:00"], "开盘": [1.0], "最高": [1.1], "最低": [0.9], "收盘": [1.05], "成交量": [100]}
-        )
+        return [{"datetime": "2026-06-18 14:15:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 100}]
 
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(ak, "stock_zh_a_hist_min_em", fake_fetch)
+    monkeypatch.setattr(intraday.skill_market_data, "mootdx_cn_bars", fake_fetch)
 
     assert intraday.fetch_cn_intraday("688256.SH") is True
-    assert captured["period"] == "15"
+    assert captured == {"code": "688256", "category": 9, "offset": 120}
     assert (tmp_path / "CN_688256_15m.csv").exists()
 
 
 def test_fetch_cn_intraday_wraps_source_timeout(monkeypatch, tmp_path):
-    import pandas as pd
-    import akshare as ak
-
     captured = {}
 
     def fake_timeout(timeout_s, func, **kwargs):
@@ -160,95 +152,44 @@ def test_fetch_cn_intraday_wraps_source_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
     monkeypatch.setattr(intraday, "_run_with_timeout", fake_timeout)
     monkeypatch.setattr(
-        ak,
-        "stock_zh_a_hist_min_em",
-        lambda **kwargs: pd.DataFrame(
-            {"时间": ["2026-06-18 14:15:00"], "开盘": [1.0], "最高": [1.1], "最低": [0.9], "收盘": [1.05], "成交量": [100]}
-        ),
+        intraday.skill_market_data,
+        "mootdx_cn_bars",
+        lambda **kwargs: [{"datetime": "2026-06-18 14:15:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 100}],
     )
 
     assert intraday.fetch_cn_intraday("688256.SH") is True
     assert captured["timeout_s"] == intraday._CNHK_TIMEOUT_S
 
 
-def test_fetch_cn_intraday_falls_back_to_yfinance(monkeypatch, tmp_path):
-    import akshare as ak
-
-    captured = {}
-
+def test_fetch_cn_intraday_returns_false_when_mootdx_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": 0, "HK": 0})
-    monkeypatch.setattr(ak, "stock_zh_a_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("eastmoney down")))
+    monkeypatch.setattr(intraday.skill_market_data, "mootdx_cn_bars", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("mootdx down")))
 
-    def fake_yfinance(market, symbol, output_symbol):
-        captured.update({"market": market, "symbol": symbol, "output_symbol": output_symbol})
-        return True
-
-    monkeypatch.setattr(intraday, "_fetch_yfinance_intraday", fake_yfinance)
-
-    assert intraday.fetch_cn_intraday("688256.SH") is True
-    assert captured == {"market": "CN", "symbol": "688256.SH", "output_symbol": "688256"}
-
-
-def test_fetch_cn_intraday_skips_primary_after_consecutive_failures(monkeypatch, tmp_path):
-    import akshare as ak
-
-    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": intraday._PRIMARY_DISABLE_AFTER, "HK": 0})
-    monkeypatch.setattr(ak, "stock_zh_a_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(AssertionError("primary should be skipped")))
-    monkeypatch.setattr(intraday, "_fetch_yfinance_intraday", lambda market, symbol, output_symbol: True)
-
-    assert intraday.fetch_cn_intraday("688256.SH") is True
+    assert intraday.fetch_cn_intraday("688256.SH") is False
 
 
 def test_fetch_hk_intraday_writes_15m_file(monkeypatch, tmp_path):
-    import pandas as pd
-    import akshare as ak
-
     captured = {}
 
-    def fake_fetch(**kwargs):
+    def fake_fetch(symbol, **kwargs):
+        captured["symbol"] = symbol
         captured.update(kwargs)
-        return pd.DataFrame(
-            {"时间": ["2026-06-18 14:15:00"], "开盘": [1.0], "最高": [1.1], "最低": [0.9], "收盘": [1.05], "成交量": [100]}
-        )
+        return [{"datetime": "2026-06-18 14:15:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 100}]
 
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(ak, "stock_hk_hist_min_em", fake_fetch)
+    monkeypatch.setattr(intraday.skill_market_data, "yahoo_chart", fake_fetch)
 
     assert intraday.fetch_hk_intraday("0020.HK") is True
-    assert captured["period"] == "15"
+    assert captured["symbol"] == "0020.HK"
+    assert captured["interval"] == "15m"
     assert (tmp_path / "HK_00020_15m.csv").exists()
 
 
-def test_fetch_hk_intraday_falls_back_to_yfinance(monkeypatch, tmp_path):
-    import akshare as ak
-
-    captured = {}
-
+def test_fetch_hk_intraday_returns_false_when_yahoo_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": 0, "HK": 0})
-    monkeypatch.setattr(ak, "stock_hk_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("eastmoney down")))
+    monkeypatch.setattr(intraday.skill_market_data, "yahoo_chart", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("yahoo down")))
 
-    def fake_yfinance(market, symbol, output_symbol):
-        captured.update({"market": market, "symbol": symbol, "output_symbol": output_symbol})
-        return True
-
-    monkeypatch.setattr(intraday, "_fetch_yfinance_intraday", fake_yfinance)
-
-    assert intraday.fetch_hk_intraday("0020.HK") is True
-    assert captured == {"market": "HK", "symbol": "0020.HK", "output_symbol": "00020"}
-
-
-def test_fetch_hk_intraday_skips_primary_after_consecutive_failures(monkeypatch, tmp_path):
-    import akshare as ak
-
-    monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(intraday, "_CNHK_PRIMARY_FAILURES", {"CN": 0, "HK": intraday._PRIMARY_DISABLE_AFTER})
-    monkeypatch.setattr(ak, "stock_hk_hist_min_em", lambda **kwargs: (_ for _ in ()).throw(AssertionError("primary should be skipped")))
-    monkeypatch.setattr(intraday, "_fetch_yfinance_intraday", lambda market, symbol, output_symbol: True)
-
-    assert intraday.fetch_hk_intraday("0020.HK") is True
+    assert intraday.fetch_hk_intraday("0020.HK") is False
 
 
 def test_yahoo_symbol_maps_cn_and_hk_codes():
@@ -258,34 +199,23 @@ def test_yahoo_symbol_maps_cn_and_hk_codes():
     assert intraday._yahoo_symbol("HK", "0020.HK") == "0020.HK"
 
 
-def test_fetch_us_intraday_falls_back_to_yfinance_with_timeout(monkeypatch, tmp_path):
-    import pandas as pd
-    import akshare as ak
-    import yfinance as yf
-
+def test_fetch_us_intraday_uses_yahoo_chart(monkeypatch, tmp_path):
     captured = {}
 
-    class FakeTicker:
-        def history(self, *args, **kwargs):
-            captured["kwargs"] = kwargs
-            return pd.DataFrame(
-                {"Datetime": ["2026-05-18 09:30:00"], "Open": [1.0], "High": [1.1], "Low": [0.9], "Close": [1.05], "Volume": [1000]}
-            )
+    def fake_fetch(symbol, **kwargs):
+        captured["symbol"] = symbol
+        captured.update(kwargs)
+        return [{"datetime": "2026-05-18 09:30:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 1000}]
 
-    monkeypatch.setattr(ak, "stock_us_hist_min_em", lambda symbol: (_ for _ in ()).throw(RuntimeError("eastmoney blocked")))
-    monkeypatch.setattr(yf, "Ticker", lambda symbol: FakeTicker())
+    monkeypatch.setattr(intraday.skill_market_data, "yahoo_chart", fake_fetch)
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
     assert intraday.fetch_us_intraday("NVDA") is True
-    assert captured["kwargs"]["timeout"] == intraday._US_TIMEOUT_S
-    assert captured["kwargs"]["interval"] == "15m"
+    assert captured["symbol"] == "NVDA"
+    assert captured["timeout"] == intraday._US_TIMEOUT_S
+    assert captured["interval"] == "15m"
     assert (tmp_path / "US_NVDA_15m.csv").exists()
 
 
 def test_can_fetch_us_intraday_returns_false_on_exception(monkeypatch):
-    import requests
-
-    def raise_error(*args, **kwargs):
-        raise requests.RequestException("blocked")
-
-    monkeypatch.setattr(requests, "get", raise_error)
+    monkeypatch.setattr(intraday.skill_market_data, "yahoo_chart", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("blocked")))
     assert intraday._can_fetch_us_intraday() is False

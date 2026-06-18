@@ -21,7 +21,7 @@ from tradingagents.runtime.paths import ensure_runtime_dirs
 # ── Python 3.14 SSL compatibility patch ──────────────────────────────────────
 # Python 3.14 made TLS close_notify mandatory, raising SSLEOFError for servers
 # (e.g. East Money, Yahoo Finance) that close the TCP connection without it.
-# We patch urllib3's create_urllib3_context (used by requests/akshare/yfinance)
+# We patch urllib3's create_urllib3_context (used by requests/yfinance)
 # to set OP_IGNORE_UNEXPECTED_EOF on every SSL context it creates.
 def _patch_ssl_eof() -> None:
     flag = getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)

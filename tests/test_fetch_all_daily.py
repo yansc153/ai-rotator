@@ -70,23 +70,25 @@ def test_effective_market_coverage_accepts_previous_business_day_cache():
     assert covered == 2
 
 
-def test_yf_parse_rows_can_be_mapped_back_to_canonical_hk_symbol():
-    columns = pd.MultiIndex.from_product(
-        [["Open", "High", "Low", "Close", "Volume"], ["0700.HK"]],
-        names=["Price", "Ticker"],
+def test_yahoo_batch_maps_back_to_canonical_symbol(monkeypatch):
+    conn = _mk_conn()
+    monkeypatch.setattr(
+        daily.skill_market_data,
+        "yahoo_chart",
+        lambda ticker, **kwargs: [
+            {"datetime": "2026-06-17", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 100},
+            {"datetime": "2026-06-18", "open": 10, "high": 12, "low": 10, "close": 11, "volume": 200},
+        ],
     )
-    raw = pd.DataFrame(
-        [[500.0, 510.0, 495.0, 505.0, 1000.0]],
-        index=pd.to_datetime([date(2026, 5, 22)]),
-        columns=columns,
-    )
-    rows = daily._yf_parse_raw(raw, ["0700.HK"], "HK")
-    assert rows[0]["symbol"] == "0700.HK"
 
-    mapped = {"0700.HK": "00700.HK"}
-    for row in rows:
-        row["symbol"] = mapped.get(row["symbol"], row["symbol"])
-    assert rows[0]["symbol"] == "00700.HK"
+    saved = daily._yahoo_batch(["0700.HK"], "HK", conn, ticker_to_symbol={"0700.HK": "00700.HK"})
+
+    rows = conn.execute("SELECT date, market, symbol, close, pct_change FROM daily_prices ORDER BY date").fetchall()
+    assert saved == 2
+    assert rows == [
+        ("2026-06-17", "HK", "00700.HK", 10.0, 0.0),
+        ("2026-06-18", "HK", "00700.HK", 11.0, 10.0),
+    ]
 
 
 def test_backfill_uses_yfinance_symbol_but_preserves_canonical_symbol():
