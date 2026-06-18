@@ -3,6 +3,8 @@ from tempfile import TemporaryDirectory
 import json
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -81,6 +83,19 @@ def test_load_symbols_applies_session_limit(monkeypatch):
         result = intraday._load_symbols(session="midday", max_symbols=3)
 
     assert result == [("CN", "S000.SH"), ("CN", "S001.SH"), ("CN", "S002.SH")]
+
+
+def test_tail_close_fails_fast_when_intraday_source_is_down(monkeypatch, capsys):
+    symbols = [("CN", f"{i:06d}.SZ") for i in range(intraday._FRESH_SESSION_FAIL_FAST_AFTER + 2)]
+    monkeypatch.setattr(intraday, "_load_symbols", lambda session, max_symbols: symbols)
+    monkeypatch.setattr(intraday, "fetch_cn_intraday", lambda symbol: False)
+    monkeypatch.setattr(sys, "argv", ["fetch_intraday.py", "--session", "tail_close"])
+
+    with pytest.raises(SystemExit) as exc:
+        intraday.main()
+
+    assert exc.value.code == 2
+    assert "intraday source unavailable" in capsys.readouterr().out
 
 
 def test_fetch_us_intraday_falls_back_to_yfinance_with_timeout(monkeypatch):

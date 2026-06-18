@@ -35,6 +35,7 @@ _US_TIMEOUT_S = 10
 _US_PREFLIGHT_TIMEOUT_S = 5
 _CNHK_RETRIES = 3
 _US_EASTMONEY_PREFIX = "105"
+_FRESH_SESSION_FAIL_FAST_AFTER = 8
 
 SESSION_MARKETS = {
     "morning": {"CN", "HK", "US"},
@@ -228,9 +229,23 @@ def main() -> None:
                 ok += 1
             else:
                 fail += 1
+                if args.session in {"midday", "tail_close"} and ok == 0 and fail >= _FRESH_SESSION_FAIL_FAST_AFTER:
+                    print(
+                        "\n[ERROR] intraday source unavailable: "
+                        f"{fail} consecutive symbols failed; fresh session cannot continue",
+                        flush=True,
+                    )
+                    sys.exit(2)
         except Exception as exc:
             print(f"  {market} {symbol}: ERROR — {exc}", flush=True)
             fail += 1
+            if args.session in {"midday", "tail_close"} and ok == 0 and fail >= _FRESH_SESSION_FAIL_FAST_AFTER:
+                print(
+                    "\n[ERROR] intraday source unavailable: "
+                    f"{fail} consecutive symbols failed; fresh session cannot continue",
+                    flush=True,
+                )
+                sys.exit(2)
     print(f"\n完成: {ok} 成功 / {fail} 失败", flush=True)
 
 
