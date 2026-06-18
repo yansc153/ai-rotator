@@ -19,12 +19,12 @@ sessions:
     structure_only_min_score: 45.0
     structure_only_max_rank: 3
     min_market_cap:
-      CN: 5
-      HK: 3
-      US: 4
+      CN: 200
+      HK: 217.4
+      US: 2.8
   midday:
-    label: "☀️ A股午盘信号"
-    caption: "A/HK午盘决策 + 尾盘预备"
+    label: "☀️ 午间交易计划"
+    caption: "午间休市复盘 + 下午点位计划"
     focus_markets: ["CN", "HK"]
     send_to_discord: true
     include_candidate_set: true
@@ -38,14 +38,14 @@ sessions:
     intraday_weight: 0.6
     overbought_5d: 0.35
     overextended_intraday: 0.04
-    require_fresh_intraday: false
+    require_fresh_intraday: true
     require_active_sector_for_short: true
     structure_only_min_score: 45.0
     structure_only_max_rank: 3
     min_market_cap:
-      CN: 5
-      HK: 3
-      US: 4
+      CN: 200
+      HK: 217.4
+      US: 2.8
   ah_open:
     label: "🔔 A股开盘精选"
     caption: "A/HK开盘前优先盯盘 · 动量 + 赛道共振"
@@ -73,9 +73,34 @@ sessions:
     structure_only_min_score: 40.0
     structure_only_max_rank: 5
     min_market_cap:
-      CN: 5
-      HK: 3
-      US: 4
+      CN: 200
+      HK: 217.4
+      US: 2.8
+
+  tail_close:
+    label: "🌇 尾盘确认"
+    caption: "14:30 后确认承接、风控和目标"
+    focus_markets: ["CN", "HK"]
+    send_to_discord: true
+    include_candidate_set: true
+    strict_send_requires_tradable: false
+    emit_short_block: true
+    emit_swing_block: false
+    emit_bottleneck_block: false
+    bottleneck_block_size: 0
+    emit_coverage_watch: true
+    emit_earnings: false
+    intraday_weight: 0.7
+    overbought_5d: 0.35
+    overextended_intraday: 0.05
+    require_fresh_intraday: true
+    require_active_sector_for_short: true
+    structure_only_min_score: 45.0
+    structure_only_max_rank: 3
+    min_market_cap:
+      CN: 200
+      HK: 217.4
+      US: 2.8
 
   evening:
     label: "🧭 AI赛道短线精灵"
@@ -104,6 +129,6 @@ sessions:
     structure_only_min_score: 48.5
     structure_only_max_rank: 3
     min_market_cap:
-      CN: 5
-      HK: 3
-      US: 4
+      CN: 200
+      HK: 217.4
+      US: 2.8

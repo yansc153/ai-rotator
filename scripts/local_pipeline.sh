@@ -3,7 +3,9 @@
 #
 # Usage:
 #   ./scripts/local_pipeline.sh morning    # 07:00 — full pipeline + 盘前早报推送
+#   ./scripts/local_pipeline.sh ah_open    # 08:45 — A/HK开盘观察池
 #   ./scripts/local_pipeline.sh midday     # 12:30 — re-screen + 盘中播报
+#   ./scripts/local_pipeline.sh tail_close # 14:30 — 尾盘确认
 #   ./scripts/local_pipeline.sh evening    # 20:30 — US prep watchlist + Discord push
 #
 # This script is the local/runtime entrypoint for scheduled sessions.
@@ -116,6 +118,17 @@ case "$SESSION" in
     run_critical_step "Send 盘中播报 to Discord"             "cd $SCRIPTS && python3 send_discord_brief.py --session midday"
     ;;
 
+  tail_close)
+    # Tail-close confirmation: refresh the same deterministic inputs, require
+    # fresh intraday data in session_rules, then send only gated trade cards.
+    run_critical_step "Fetch daily OHLCV (tail refresh)"      "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_critical_step "Re-score candidates (tail cache)"      "cd $SCRIPTS && python3 screen_candidates.py"
+    run_step "Fetch 1h intraday bars (tail refresh)"          "cd $SCRIPTS && python3 fetch_intraday.py --session tail_close"
+    run_critical_step "Build US rotation report"              "cd $SCRIPTS && python3 run_daily_rotation.py --market US"
+    run_critical_step "Build AH rotation report"              "cd $SCRIPTS && python3 run_daily_rotation.py --market AH"
+    run_critical_step "Send 尾盘确认 to Discord"               "cd $SCRIPTS && python3 send_discord_brief.py --session tail_close"
+    ;;
+
   evening)
     # US prep watchlist window. Internal session name stays 'evening'
     # but the product meaning is shortline-genie watchlist, not an auto-buy signal.
@@ -140,7 +153,7 @@ case "$SESSION" in
     ;;
 
   *)
-    echo "[ERROR] Unknown session: $SESSION  (use: morning | midday | ah_open | evening)"
+    echo "[ERROR] Unknown session: $SESSION  (use: morning | ah_open | midday | tail_close | evening)"
     exit 1
     ;;
 esac

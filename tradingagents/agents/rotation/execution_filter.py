@@ -8,6 +8,13 @@ from typing import Any
 import pandas as pd
 
 from tradingagents.agents.rotation.common import normalize_symbol_for_file
+from tradingagents.agents.rotation.company_concept import (
+    ashare_board,
+    market_board_label,
+    market_cap_gate,
+    verify_company_concept,
+)
+from tradingagents.agents.rotation.price_engine import build_trade_level_plan
 from tradingagents.contracts.decision_chain import ExecutionDecision, FreshnessRecord
 from tradingagents.runtime.paths import PROJECT_ROOT, RAW_DATA_DIR
 
@@ -151,10 +158,38 @@ def classify_candidate(
     push_decision = "tradable_now"
     three_locks = item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {}
     three_locks_status = str(three_locks.get("status", "insufficient_history"))
+    concept_keys = {
+        "company_concept",
+        "concept_verified",
+        "concept_status",
+        "concept_source",
+        "concept_source_url",
+        "concept_evidence_date",
+        "concept_confidence",
+        "ai_relationship",
+        "ai_relevance",
+    }
+    if concept_keys <= set(item.keys()):
+        concept = {key: item.get(key) for key in concept_keys}
+    else:
+        concept = verify_company_concept(item, evidence_date=trade_date)
+    cap_gate = market_cap_gate(item.get("market", ""), item.get("market_cap"))
+    daily_allowed = three_locks_status in {"double_lock", "triple_lock"} and not three_locks.get("breakdown_support")
 
     if focus is not None and item.get("market") not in focus:
         push_decision = "rejected"
         reason_codes.append("market_out_of_scope")
+
+    if not cap_gate["market_cap_ok"]:
+        push_decision = "rejected"
+        reason_codes.append("market_cap_below_200b_cny")
+
+    if concept["concept_status"] in {"pseudo_ai", "unverified"}:
+        push_decision = "rejected"
+        reason_codes.append(f"concept_{concept['concept_status']}")
+    elif not concept["concept_verified"] and push_decision == "tradable_now":
+        push_decision = "watch_only"
+        reason_codes.append("concept_not_verified")
 
     active_sector = bool(item.get("active_sector"))
     if push_decision == "tradable_now" and horizon == "short" and meta.get("require_active_sector_for_short", True):
@@ -171,7 +206,7 @@ def classify_candidate(
     min_market_caps = meta.get("min_market_cap", {})
     min_cap = float(min_market_caps.get(item.get("market"), 0))
     market_cap = float(item.get("market_cap", 0.0) or 0.0)
-    if push_decision == "tradable_now" and market_cap < min_cap:
+    if push_decision != "rejected" and market_cap < min_cap:
         push_decision = "rejected"
         reason_codes.append("liquidity_below_floor")
 
@@ -202,6 +237,9 @@ def classify_candidate(
     if push_decision == "tradable_now" and three_locks_status == "invalid":
         push_decision = "watch_only"
         reason_codes.append("three_locks_invalid")
+    if push_decision == "tradable_now" and not daily_allowed:
+        push_decision = "watch_only"
+        reason_codes.append("daily_structure_not_confirmed")
 
     if active_sector:
         invalid_if.append("sector_leader_breaks")
@@ -215,6 +253,22 @@ def classify_candidate(
         invalid_if.append("three_locks_invalid")
     if three_locks.get("breakdown_support"):
         invalid_if.append("three_locks_support_break")
+
+    trade_levels = build_trade_level_plan({**item, "three_locks": three_locks})
+    intraday_triggered = freshness.intraday_status == "fresh" and horizon == "short"
+    fresh_data = freshness.intraday_status == "fresh"
+    risk_levels_complete = bool(trade_levels.get("complete"))
+    trade_language_allowed = all(
+        [
+            fresh_data,
+            concept["concept_verified"],
+            cap_gate["market_cap_ok"],
+            daily_allowed,
+            intraday_triggered,
+            risk_levels_complete,
+            push_decision == "tradable_now",
+        ]
+    )
 
     score = session_score
     if active_sector:
@@ -236,6 +290,8 @@ def classify_candidate(
 
     payload = {
         **item,
+        **concept,
+        **cap_gate,
         "push_decision": push_decision,
         "execution_score": round(score, 4),
         "reason_codes": reason_codes,
@@ -243,6 +299,15 @@ def classify_candidate(
         "freshness_status": freshness.intraday_status,
         "freshness_record": freshness.model_dump(),
         "catalyst_status": c_status,
+        "a_share_board": ashare_board(item.get("symbol", ""), item.get("market")),
+        "market_board": market_board_label(item.get("symbol", ""), item.get("market", "")),
+        "daily_allowed": daily_allowed,
+        "intraday_triggered": intraday_triggered,
+        "fresh_data": fresh_data,
+        "risk_levels_complete": risk_levels_complete,
+        "trade_language_allowed": trade_language_allowed,
+        "trade_levels": trade_levels,
+        "target_plan": trade_levels.get("target_plan", {}),
     }
     ExecutionDecision.model_validate(
         {

@@ -58,7 +58,7 @@ def test_midday_missing_intraday_downgrades_to_watch_only():
     assert "intraday_missing" in decision["reason_codes"]
 
 
-def test_non_active_sector_short_becomes_watch_only():
+def test_non_ai_sector_short_is_rejected_before_watchlist():
     candidate = _base_candidate(active_sector=False, sector="OTHER")
     with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
         mocked.return_value = build_freshness_record("US", "NVDA", "morning", "2026-05-05").model_copy(
@@ -69,6 +69,24 @@ def test_non_active_sector_short_becomes_watch_only():
             session="morning",
             trade_date="2026-05-05",
             active_sector_ids=["GPU"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+    assert decision["push_decision"] == "rejected"
+    assert "concept_unverified" in decision["reason_codes"]
+
+
+def test_verified_ai_but_non_active_sector_becomes_watch_only():
+    candidate = _base_candidate(active_sector=False, sector="GPU")
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("US", "NVDA", "morning", "2026-05-05").model_copy(
+            update={"intraday_status": "fresh", "source_path": "/tmp/fresh.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="morning",
+            trade_date="2026-05-05",
+            active_sector_ids=["AI芯片"],
             earnings_index={},
             earnings_state="absent",
         )
@@ -163,3 +181,46 @@ def test_confirmed_three_locks_adds_weight_but_does_not_override_scope():
     assert decision["push_decision"] == "rejected"
     assert "market_out_of_scope" in decision["reason_codes"]
     assert decision["execution_score"] < candidate["_session_score"]
+
+
+def test_low_market_cap_rejected_even_when_other_gates_are_good():
+    candidate = _base_candidate(market="CN", symbol="688256.SH", sector="AI芯片", market_cap=199.0)
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("CN", "688256.SH", "midday", "2026-05-05").model_copy(
+            update={"intraday_status": "fresh", "source_path": "/tmp/fresh.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="midday",
+            trade_date="2026-05-05",
+            active_sector_ids=["AI芯片"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+    assert decision["push_decision"] == "rejected"
+    assert "market_cap_below_200b_cny" in decision["reason_codes"]
+
+
+def test_trade_language_gate_requires_all_hard_gates():
+    candidate = _base_candidate(
+        market="CN",
+        symbol="688256.SH",
+        sector="AI芯片",
+        market_cap=250.0,
+        three_locks={"status": "double_lock", "score": 66.0, "support_level": 116.0, "pressure_level": 125.0},
+    )
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("CN", "688256.SH", "midday", "2026-05-05").model_copy(
+            update={"intraday_status": "fresh", "source_path": "/tmp/fresh.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="midday",
+            trade_date="2026-05-05",
+            active_sector_ids=["AI芯片"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+    assert decision["trade_language_allowed"] is True
+    assert decision["market_board"] == "A股·科创板"
+    assert decision["target_plan"]["target_source"] in {"prior_high", "fib_extension"}

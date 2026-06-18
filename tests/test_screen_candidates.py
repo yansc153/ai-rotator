@@ -10,6 +10,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import screen_candidates as sc
+from tradingagents.agents.rotation.company_concept import ashare_board, market_cap_gate, verify_company_concept
 
 
 def test_select_candidates_preserves_ambush_and_watch(monkeypatch):
@@ -70,3 +71,36 @@ def test_allowed_latest_dates_prefers_manifest_market_dates():
 def test_allowed_latest_dates_falls_back_without_manifest():
     dates = sc._allowed_latest_dates("US", None)
     assert len(dates) == 2
+
+
+def test_ashare_board_classification_covers_required_prefixes():
+    assert ashare_board("000001.SZ", "CN") == "深主板"
+    assert ashare_board("002972.SZ", "CN") == "深主板"
+    assert ashare_board("300750.SZ", "CN") == "创业板"
+    assert ashare_board("301000.SZ", "CN") == "创业板"
+    assert ashare_board("600519.SH", "CN") == "沪主板"
+    assert ashare_board("603986.SH", "CN") == "沪主板"
+    assert ashare_board("688256.SH", "CN") == "科创板"
+    assert ashare_board("689009.SH", "CN") == "科创板"
+
+
+def test_market_cap_gate_rejects_below_missing_and_unknown_currency():
+    assert market_cap_gate("CN", 199.99)["market_cap_ok"] is False
+    assert market_cap_gate("CN", None)["market_cap_ok"] is False
+    assert market_cap_gate("XX", 9999)["market_cap_ok"] is False
+    assert market_cap_gate("US", 3.0)["market_cap_ok"] is True
+
+
+def test_fenghua_gaoke_mlcc_is_not_trade_verified_ai():
+    concept = verify_company_concept(
+        {
+            "symbol": "000636.SZ",
+            "company_name": "风华高科",
+            "sector": "MLCC",
+            "sector_tags": "MLCC;被动元件",
+            "chain_group": "电子元件",
+        },
+        evidence_date="2026-06-18",
+    )
+    assert concept["concept_verified"] is False
+    assert concept["company_concept"] == "MLCC/被动元件"

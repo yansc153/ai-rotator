@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from pathlib import Path
 
 from tradingagents.agents.rotation.signal_review import (
@@ -57,6 +58,8 @@ def _payload() -> dict:
                     "current_price": 100.0,
                     "execution_score": 80.0,
                     "reason": "三把锁确认 + 赛道轮动",
+                    "trade_language_allowed": True,
+                    "target_plan": {"target_source": "fvg_gap"},
                     "three_locks": {
                         "status": "triple_lock",
                         "score": 90.0,
@@ -83,6 +86,14 @@ def test_signal_rows_from_payload_keeps_three_locks_and_push_price():
     assert row["push_price"] == 100.0
     assert row["three_locks_status"] == "triple_lock"
     assert row["support_level"] == 96.0
+    source = json.loads(row["source_payload_json"])
+    assert source["target_plan"]["target_source"] == "fvg_gap"
+
+
+def test_signal_rows_skip_items_without_trade_language_gate():
+    payload = _payload()
+    payload["opportunity_buckets"]["premarket_open_sell"][0]["trade_language_allowed"] = False
+    assert signal_rows_from_payload(payload) == []
 
 
 def test_refresh_signal_outcomes_uses_push_price_to_current_price(tmp_path, monkeypatch):

@@ -146,10 +146,10 @@ DISCORD_MESSAGE_LIMIT = 2000
 MARKET_SECTION_ORDER = ("US", "HK", "CN")
 MARKET_SECTION_LABELS = {"US": "美股专区", "HK": "港股专区", "CN": "A股专区"}
 THREE_LOCK_LABELS = {
-    "triple_lock": "三锁齐开",
-    "double_lock": "两锁确认",
-    "single_lock": "一锁观察",
-    "invalid": "锁失效",
+    "triple_lock": "日线强确认",
+    "double_lock": "日线确认",
+    "single_lock": "日线观察",
+    "invalid": "结构失效",
     "insufficient_history": "数据不足",
 }
 RADAR_MIN_SCORE = 35.0
@@ -171,6 +171,82 @@ AI_ROTATION_KEYWORDS = (
     "GPU",
     "云计算",
 )
+def _status_payload(date_str: str, session: str, reason_codes: list[str]) -> dict[str, Any]:
+    return {
+        "run_id": str(uuid4()),
+        "date": date_str,
+        "session": session,
+        "leaders": [],
+        "cross_market_signal": {"narrative": "数据未更新，今日无交易级信号。"},
+        "short_block": [],
+        "swing_block": [],
+        "bottleneck_block": [],
+        "coverage_watch": [],
+        "tradable_now": [],
+        "watch_only": [],
+        "rejected": [],
+        "market_state": {},
+        "market_sections": {},
+        "three_locks_summary": "",
+        "opportunity_buckets": {},
+        "danger_pool": [],
+        "mapping_chain": [],
+        "open_script": [],
+        "signal_review": {},
+        "freshness_manifest": [],
+        "fresh_gate": {"ok": False, "reason_codes": reason_codes},
+        "status_only": True,
+        "send_status": "status_only",
+        "contract_version": CONTRACT_VERSION,
+    }
+
+
+def _fresh_gate_status(date_str: str, session: str, freshness_manifest: list[dict[str, Any]]) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    if date_str != _today_cst():
+        return {"ok": False, "reason_codes": ["requested_date_not_today"], "strict_today": True}
+
+    manifest = read_fetch_manifest()
+    if manifest.get("trade_date") != today_cst() or manifest.get("status") != "ok":
+        reason_codes.append("fetch_status_not_fresh")
+
+    candidates_path = PROJECT_ROOT / "data" / "candidates.json"
+    try:
+        candidates = json.loads(candidates_path.read_text())
+        if candidates.get("date") != today_cst():
+            reason_codes.append("candidates_not_fresh")
+    except Exception:
+        reason_codes.append("candidates_missing")
+
+    if _session_meta(session).get("require_fresh_intraday", False):
+        records = freshness_manifest or []
+        if not records or not any(record.get("intraday_status") == "fresh" for record in records):
+            reason_codes.append("intraday_not_fresh")
+
+    return {"ok": not reason_codes, "reason_codes": reason_codes, "strict_today": True}
+
+
+def _status_text(date_str: str, session: str, payload: dict[str, Any]) -> str:
+    meta = _session_meta(session)
+    reasons = payload.get("fresh_gate", {}).get("reason_codes", []) or ["data_not_ready"]
+    reason_map = {
+        "rotation_missing": "轮动报告未生成",
+        "requested_date_not_today": "请求日期不是今天",
+        "fetch_status_not_fresh": "行情抓取状态不是今天",
+        "candidates_not_fresh": "候选池不是今天生成",
+        "candidates_missing": "候选池不存在",
+        "intraday_not_fresh": "盘中数据未更新",
+        "data_not_ready": "数据未准备好",
+    }
+    readable = "；".join(reason_map.get(str(code), str(code)) for code in reasons)
+    return "\n".join(
+        [
+            f"{meta['label']} · {date_str}",
+            "数据未更新，今日无交易级信号。",
+            f"原因：{readable}",
+            "处理：等待下一轮数据刷新后再发布正常观察卡。",
+        ]
+    )
 
 
 def _load_rotation(date_str: str, market: str) -> dict[str, Any]:
@@ -337,7 +413,7 @@ def _technical_line(item: dict[str, Any]) -> str:
     three_locks = item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {}
     reason = str(three_locks.get("reason") or "").strip()
     if not reason:
-        return "结构：暂无三把锁确认"
+        return "结构：暂无日线确认"
     parts = [f"结构：{reason}"]
     support = three_locks.get("support_level")
     pressure = three_locks.get("pressure_level")
@@ -401,9 +477,25 @@ def _bucket_line(item: dict[str, Any]) -> dict[str, Any]:
         "current_price": item.get("current_price"),
         "ret_5d": item.get("ret_5d"),
         "execution_score": float(item.get("execution_score", 0.0) or 0.0),
+        "push_decision": item.get("push_decision"),
+        "reason_codes": item.get("reason_codes", []),
         "reason": _item_reason(item),
         "pool": item.get("pool", ""),
         "three_locks": item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {},
+        "market_board": item.get("market_board"),
+        "company_concept": item.get("company_concept"),
+        "ai_relationship": item.get("ai_relationship"),
+        "concept_verified": item.get("concept_verified"),
+        "concept_status": item.get("concept_status"),
+        "market_cap_ok": item.get("market_cap_ok"),
+        "market_cap_cny_billion": item.get("market_cap_cny_billion"),
+        "daily_allowed": item.get("daily_allowed"),
+        "intraday_triggered": item.get("intraday_triggered"),
+        "fresh_data": item.get("fresh_data"),
+        "risk_levels_complete": item.get("risk_levels_complete"),
+        "trade_language_allowed": item.get("trade_language_allowed"),
+        "trade_levels": item.get("trade_levels", {}),
+        "target_plan": item.get("target_plan", {}),
     }
 
 
@@ -534,26 +626,26 @@ def _playbook_line(item: dict[str, Any], playbook: str) -> dict[str, Any]:
     line = _bucket_line(item)
     support = _support_level(item)
     if playbook == "premarket_open_sell":
-        line["trade_style"] = "盘前强势"
-        line["reason"] = "剧本A：盘前/开盘强承接才参与；开盘不延续就卖掉，不恋战"
+        line["trade_style"] = "强势确认"
+        line["reason"] = "盘前/开盘承接强，适合继续盯强弱延续；不延续就降级观察"
     elif playbook == "intraday_dip_reversal":
-        line["trade_style"] = "回落低吸"
+        line["trade_style"] = "回踩确认"
         if not item.get("active_sector") and _is_ai_rotation_family(item):
-            line["trade_style"] = "扩展回踩"
+            line["trade_style"] = "边缘观察"
             line["reason"] = (
-                f"剧本B扩展：AI分支未进今日top3，但三把锁有效；只等 {_fmt_price(support)} 附近承接，不追"
+                f"AI 关系不是最核心，只看 {_fmt_price(support)} 附近是否有承接，不追高"
                 if support is not None
-                else "剧本B扩展：AI分支未进今日top3，只等盘中承接确认，不追"
+                else "AI 关系不是最核心，只等盘中承接确认，不追高"
             )
         else:
             line["reason"] = (
-                f"剧本B：盘中跌到 {_fmt_price(support)} 附近且不破再买；尾盘或次日盘前卖"
+                f"盘中回到 {_fmt_price(support)} 附近仍有承接，才升级处理"
                 if support is not None
-                else "剧本B：只等盘中回落承接确认；尾盘或次日盘前卖"
+                else "只等盘中回落承接确认，直线拉升不追"
             )
     elif playbook == "overheat_failure_short":
-        line["trade_style"] = "反手空观察"
-        line["reason"] = "剧本C：高位转弱后才看空；跌破VWAP/开盘区间且相对QQQ/SMH转弱才执行"
+        line["trade_style"] = "过热转弱"
+        line["reason"] = "涨幅过大后只看转弱确认，跌破关键日内区间才进入风险观察"
     else:
         if "high_atr" in _warnings(item):
             line["trade_style"] = "高波动雷达"
@@ -657,9 +749,9 @@ def _build_market_state(
 
     summary = (
         f"当前更像{regime}，主线状态为{mainline_health}，宽度表现为{breadth}。"
-        f"今日交易剧本：开盘主多 {len(premarket_open_sell)} 个，"
-        f"回踩主多 {len(intraday_dip_reversal)} 个，"
-        f"反手空观察 {len(overheat_failure_short)} 个；"
+        f"今日观察方向：开盘强势 {len(premarket_open_sell)} 个，"
+        f"回踩承接 {len(intraday_dip_reversal)} 个，"
+        f"过热转弱 {len(overheat_failure_short)} 个；"
         f"观察雷达 {len(radar_watch)} 个，禁区池 {len(danger_pool)} 个。"
         f"行动倾向：{action_bias}；不满足触发就不做。"
     )
@@ -698,11 +790,11 @@ def _build_open_script(
             f"先看美债 10Y、QQQ/SMH 期货强弱，确认今晚是 {market_state['regime']} 还是继续高位拥挤。",
         ]
         if strength_leaders:
-            script.append(f"剧本A只盯 {', '.join(strength_leaders)}：盘前/开盘强承接才参与，不延续就卖掉。")
+            script.append(f"强势确认只盯 {', '.join(strength_leaders)}：盘前/开盘承接要延续，否则降级观察。")
         if dip_leaders:
-            script.append(f"剧本B只盯 {', '.join(dip_leaders)}：跌到支撑附近且不破再买，尾盘或次日盘前兑现。")
+            script.append(f"回踩确认只盯 {', '.join(dip_leaders)}：回到支撑附近仍有承接，才继续看。")
         if short_leaders:
-            script.append(f"剧本C只盯 {', '.join(short_leaders)}：高位跌破VWAP/开盘区间且相对QQQ/SMH转弱，才考虑反手空。")
+            script.append(f"过热转弱只盯 {', '.join(short_leaders)}：高位跌破关键日内区间且相对指数转弱，才进入风险观察。")
         if mapping_chain:
             script.append(f"最后看 {mapping_chain[0]['mapped_asset']} 这条映射链能否被次日 A/H 真实交易，不成立就只保留观察。")
         return script
@@ -711,11 +803,11 @@ def _build_open_script(
         f"先看指数与核心板块是否延续 {market_state['mainline_health']}，不要在 {market_state['regime']} 状态里做相反节奏。",
     ]
     if strength_leaders:
-        script.append(f"剧本A：{', '.join(strength_leaders)} 只有开盘强承接才做，开盘不延续就卖。")
+        script.append(f"强势确认：{', '.join(strength_leaders)} 只有开盘承接延续才继续看。")
     if dip_leaders:
-        script.append(f"剧本B：{', '.join(dip_leaders)} 只等盘中跌到支撑附近且不破，没承接不做。")
+        script.append(f"回踩确认：{', '.join(dip_leaders)} 只等盘中回到支撑附近且不破，没承接不做。")
     if short_leaders:
-        script.append(f"剧本C：{', '.join(short_leaders)} 只作为过热失败空头雷达，不抢在转弱前做空。")
+        script.append(f"过热转弱：{', '.join(short_leaders)} 只作为风险雷达，不抢在转弱前行动。")
     if mapping_chain:
         script.append(f"最后确认 {mapping_chain[0]['driver']} -> {mapping_chain[0]['mapped_asset']} 的映射是否成立，避免只追概念。")
     return script
@@ -749,7 +841,7 @@ def _build_decision_layers(
         if not key[0] or not key[1] or key in seen_danger:
             continue
         reasons = set(item.get("reason_codes", []) or [])
-        if reasons == {"market_out_of_scope"}:
+        if "market_out_of_scope" in reasons:
             continue
         if _execution_score(item) < DANGER_MIN_SCORE and not reasons:
             continue
@@ -765,6 +857,13 @@ def _build_decision_layers(
                 "current_price": item.get("current_price"),
                 "ret_5d": item.get("ret_5d"),
                 "execution_score": _execution_score(item),
+                "market_board": item.get("market_board"),
+                "company_concept": item.get("company_concept"),
+                "ai_relationship": item.get("ai_relationship"),
+                "concept_verified": item.get("concept_verified"),
+                "concept_status": item.get("concept_status"),
+                "market_cap_ok": item.get("market_cap_ok"),
+                "market_cap_cny_billion": item.get("market_cap_cny_billion"),
             }
         )
 
@@ -838,8 +937,13 @@ def _build_review_payload(date_str: str, session: str) -> dict[str, Any]:
 
 
 def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, Any]:
-    us = _load_rotation(date_str, "US")
-    ah = _load_rotation(date_str, "AH")
+    if date_str != _today_cst():
+        return _status_payload(date_str, session, ["requested_date_not_today"])
+    try:
+        us = _load_rotation(date_str, "US")
+        ah = _load_rotation(date_str, "AH")
+    except FileNotFoundError:
+        return _status_payload(date_str, session, ["rotation_missing"])
     if "sector_decision" not in us or "sector_decision" not in ah:
         raise RuntimeError("rotation report missing sector_decision contract")
     us_sector = us["sector_decision"]
@@ -952,6 +1056,7 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
             break
     signal = (ah["cross_market_signals"] or us["cross_market_signals"] or [{}])[0]
     freshness_manifest = build_freshness_manifest(all_recs, session, date_str)
+    fresh_gate = _fresh_gate_status(date_str, session, freshness_manifest)
     market_state, opportunity_buckets, danger_pool, mapping_chain, open_script = _build_decision_layers(
         us_rotation=us,
         ah_rotation=ah,
@@ -987,6 +1092,9 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
         "open_script": open_script,
         "signal_review": _build_review_payload(date_str, session),
         "freshness_manifest": freshness_manifest,
+        "fresh_gate": fresh_gate,
+        "status_only": not fresh_gate["ok"],
+        "send_status": "ready" if fresh_gate["ok"] else "status_only",
         "contract_version": CONTRACT_VERSION,
     }
     PushPayload.model_validate(payload)
@@ -1160,13 +1268,46 @@ def _layer_summary(item: dict[str, Any]) -> str:
 def _fmt_bucket_item(item: dict[str, Any]) -> str:
     mkt = {"CN": "A股", "HK": "港股", "US": "美股"}.get(item.get("market"), item.get("market"))
     sec = _sector_cn(item.get("sector", ""))
+    board = item.get("market_board") or f"{mkt}·{sec}"
+    name = item.get("company_name") or item.get("symbol")
     price = _fmt_price(item.get("current_price"))
     ret = _fmt_pct(item.get("ret_5d"))
     style = item.get("trade_style", "观察")
     reason = item.get("reason", "")
     score = item.get("execution_score")
     score_text = f" 评分:{float(score):.0f}" if score is not None else ""
-    return f"{item.get('symbol')} [{mkt}·{sec}] {style}{score_text} | 现价 {price} | 5日 {ret} | {reason}"
+    concept = item.get("company_concept") or sec
+    ai_rel = item.get("ai_relationship") or "AI 关系待核验"
+    if item.get("trade_language_allowed"):
+        levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
+        target_plan = item.get("target_plan", {}) if isinstance(item.get("target_plan"), dict) else {}
+        targets = target_plan.get("targets", []) if isinstance(target_plan.get("targets"), list) else []
+        target_text = "；".join(
+            f"{row.get('label')} {_fmt_price(row.get('price'))}（{row.get('reason')}）"
+            for row in targets[:3]
+            if isinstance(row, dict)
+        )
+        return "\n".join(
+            [
+                f"{item.get('symbol')} {name} [{board}] {style}{score_text}",
+                f"   核验概念：{concept} | AI关系：{ai_rel}",
+                f"   买入位：{_fmt_price(levels.get('buy_level'))} 附近，回踩不破",
+                f"   确认买入：{_fmt_price(levels.get('confirm_buy'))} 上方站稳",
+                f"   加仓位：{_fmt_price(levels.get('add_level'))} 突破后不回落",
+                f"   止损位：{_fmt_price(levels.get('stop_loss'))} 跌破放弃",
+                f"   卖出/减仓目标：{target_text}",
+                f"   为什么：{reason}",
+            ]
+        )
+    risk_note = ""
+    if not item.get("concept_verified"):
+        risk_note = f" | 概念核验：{item.get('concept_status', '未通过')}"
+    elif not item.get("market_cap_ok", True):
+        risk_note = " | 市值未达 200 亿人民币等值"
+    return (
+        f"{item.get('symbol')} {name} [{board}] {style}{score_text} | "
+        f"现价 {price} | 5日 {ret} | 核验概念：{concept} | AI关系：{ai_rel}{risk_note} | {reason}"
+    )
 
 
 def _fmt_review_pct(value: Any) -> str:
@@ -1242,11 +1383,13 @@ def _three_locks_summary(classified: list[dict[str, Any]]) -> str:
     for item in classified:
         counts[_three_locks_label(item)] = counts.get(_three_locks_label(item), 0) + 1
     useful = [f"{label} {count} 个" for label, count in counts.items() if count]
-    return "三把锁：" + "，".join(useful[:5]) if useful else "三把锁：暂无有效结构"
+    return "日线结构：" + "，".join(useful[:5]) if useful else "日线结构：暂无有效结构"
 
 
 def build_brief_text(date_str: str, session: str = "morning", payload: dict[str, Any] | None = None) -> str:
     payload = payload or build_brief_payload(date_str, session)
+    if payload.get("status_only") or not payload.get("fresh_gate", {"ok": True}).get("ok", True):
+        return _status_text(date_str, session, payload)
     meta = _session_meta(session)
     cn_leaders = " > ".join(_sector_cn(s) for s in payload["leaders"]) if payload["leaders"] else "无"
     signal = payload["cross_market_signal"]
@@ -1305,8 +1448,8 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     if has_playbook_buckets:
         lines += [
             "",
-            f"▌ 交易剧本A｜主多｜开盘强承接 (共{len(premarket_open_sell)}只)",
-            "规则：三把锁确认 + AI赛道轮动 + 盘前/开盘承接强；适合盯开盘强延续，不延续就卖。",
+            f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
+            "规则：日线结构 + AI 赛道轮动 + 盘前/开盘承接强；只看确认后的延续。",
         ]
         if premarket_open_sell:
             for idx, item in enumerate(premarket_open_sell, start=1):
@@ -1316,8 +1459,8 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
 
         lines += [
             "",
-            f"▌ 交易剧本B｜主多｜回踩承接 (共{len(intraday_dip_reversal)}只)",
-            "规则：同样是主多，但不追开盘；只买跌到支撑/VWAP/开盘区间附近且不破的回落。",
+            f"▌ 回踩确认｜下午承接 (共{len(intraday_dip_reversal)}只)",
+            "规则：不追直线拉升；只看回到支撑/VWAP/开盘区间附近后仍有承接。",
         ]
         if intraday_dip_reversal:
             for idx, item in enumerate(intraday_dip_reversal, start=1):
@@ -1327,8 +1470,8 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
 
         lines += [
             "",
-            f"▌ 交易剧本C｜反手空｜过热失败 (共{len(overheat_failure_short)}只)",
-            "规则：只在涨太多后跌破VWAP/开盘区间、且相对QQQ/SMH转弱时看空；默认不抢空。",
+            f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
+            "规则：涨幅过大后跌破 VWAP/开盘区间、且相对指数转弱，才进入风险观察。",
         ]
         if overheat_failure_short:
             for idx, item in enumerate(overheat_failure_short, start=1):
@@ -1338,7 +1481,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
 
         lines += [
             "",
-            f"▌ 交易剧本D｜雷达｜高波动观察 (共{len(radar_watch)}只)",
+            f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
         ]
         if radar_watch:
             for idx, item in enumerate(radar_watch, start=1):
@@ -1432,7 +1575,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
             f"▌ {'今日优先盯盘 ticker' if watchlist_mode else '短线 1-2天'} (共{len(payload['short_block'])}只)",
         ]
         if watchlist_mode:
-            lines.append("说明：这是开盘前盯盘清单，不是自动买入指令；盘中只执行你自己确认的突破/回踩。")
+            lines.append("说明：这是开盘前盯盘清单，不是自动行动指令；盘中只看你自己确认的突破/回踩。")
         for idx, item in enumerate(payload["short_block"], start=1):
             mkt = market_label.get(item["market"], item["market"])
             sec = _sector_cn(item["sector"])
@@ -1447,13 +1590,19 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
                     f"   盯盘：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}"
                 )
                 lines.append(f"   加权：{_layer_summary(item)}")
-            else:
+            elif item.get("trade_language_allowed"):
                 p = item["plan"]
                 lines.append(
                     f"   现价 {item['current_price']:.2f} | 买入 {p['entry_low']:.2f}-{p['entry_high']:.2f} | "
                     f"T1 {p['target_1']:.2f} T2 {p['target_2']:.2f} | SL {p['stop_loss']:.2f} | RR 1:{p['rr']:.2f}"
                 )
                 lines.append(f"   触发：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
+            else:
+                lines.append(
+                    f"   现价 {item['current_price']:.2f} | 5日 {item.get('ret_5d', 0.0):+.1%} | "
+                    f"ATR {item.get('atr_pct', 0.0):.1%}"
+                )
+                lines.append(f"   观察：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
         offset += len(payload["short_block"])
     if emit_swing:
         lines.append("")
@@ -1464,7 +1613,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
             sec = _sector_cn(item["sector"])
             lines.append(f"#{idx} {item['symbol']} {item['company_name']} [LONG] {mkt}·{sec}")
             lines.append(
-                f"   现价 {item['current_price']:.2f} | 三档买入 "
+                f"   现价 {item['current_price']:.2f} | 分批观察 "
                 f"{p['entry_tranches'][0]:.2f}/{p['entry_tranches'][1]:.2f}/{p['entry_tranches'][2]:.2f} | "
                 f"SL {p['stop_loss']:.2f} | T1 {p['target_1']:.2f} T2 {p['target_2']:.2f}"
             )
@@ -1629,8 +1778,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default=_today_cst())
     parser.add_argument("--session", default="morning",
-                        choices=["morning", "ah_open", "midday", "evening"],
-                        help="Which daily session to push (morning/ah_open/midday/evening)")
+                        choices=["morning", "ah_open", "midday", "tail_close", "evening"],
+                        help="Which daily session to push (morning/ah_open/midday/tail_close/evening)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     payload = build_brief_payload(args.date, args.session)
@@ -1642,16 +1791,10 @@ def main() -> None:
         print("[INFO] session configured as no-send warmup; skipping Discord push")
         print(text)
         return
-    manifest = read_fetch_manifest()
-    if manifest.get("trade_date") != today_cst() or manifest.get("status") != "ok":
-        raise RuntimeError(f"[gate] fetch manifest invalid: {manifest}")
-    if _session_meta(args.session).get("strict_send_requires_tradable", False) and not payload.get("short_block"):
-        raise RuntimeError(
-            f"[gate] {args.session} has zero tradable short-term signals after freshness/execution gating; refusing live push"
-        )
     maybe_send(text)
-    _persist_decision_ledger(payload)
-    _persist_signal_ledger(payload)
+    if not payload.get("status_only"):
+        _persist_decision_ledger(payload)
+        _persist_signal_ledger(payload)
     print(text)
 
 

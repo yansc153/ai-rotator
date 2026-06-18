@@ -83,6 +83,115 @@ def build_swing_plan(current: float, atr14: float, *, side: str = "LONG", market
     }
 
 
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _gap_zones_above(item: dict[str, Any], current: float) -> list[tuple[float, float, str]]:
+    zones: list[tuple[float, float, str]] = []
+    for key in ("fvg_zones", "gap_zones", "upper_gaps"):
+        raw = item.get(key, []) or []
+        if not isinstance(raw, list):
+            continue
+        for zone in raw:
+            if not isinstance(zone, dict):
+                continue
+            low = _positive_float(zone.get("lower", zone.get("gap_low", zone.get("low"))))
+            high = _positive_float(zone.get("upper", zone.get("gap_high", zone.get("high"))))
+            if low is None or high is None:
+                continue
+            lower, upper = sorted((low, high))
+            if upper > current:
+                zones.append((lower, upper, str(zone.get("reason") or "上方 FVG/gap")))
+    return sorted(zones, key=lambda row: max(row[0], current) - current)
+
+
+def build_target_plan(item: dict[str, Any]) -> dict[str, Any]:
+    """Build deterministic sell/reduce targets with auditable sources.
+
+    Priority:
+    1. nearest upper FVG/gap zone
+    2. prior high or daily pressure
+    3. Fibonacci extension when price is already making highs
+    """
+    current = _positive_float(item.get("current_price")) or 0.0
+    if current <= 0:
+        return {"complete": False, "target_source": "unavailable", "targets": []}
+
+    three_locks = item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {}
+    atr = _positive_float(item.get("atr14"))
+    if atr is None:
+        atr_pct = _positive_float(item.get("atr_pct")) or 0.03
+        atr = current * atr_pct
+
+    zones = _gap_zones_above(item, current)
+    if zones:
+        lower, upper, zone_reason = zones[0]
+        mid = (lower + upper) / 2
+        targets = [
+            {"label": "T1", "price": round(lower, 4), "target_source": "fvg_gap", "reason": f"{zone_reason}下沿"},
+            {"label": "T2", "price": round(mid, 4), "target_source": "fvg_gap", "reason": f"{zone_reason}中位"},
+            {"label": "T3", "price": round(upper, 4), "target_source": "fvg_gap", "reason": f"{zone_reason}上沿"},
+        ]
+        return {"complete": True, "method": "fvg_gap", "target_source": "fvg_gap", "targets": targets}
+
+    pressure = _positive_float(three_locks.get("pressure_level"))
+    high_20d = _positive_float(item.get("high_20d"))
+    prior_high = max([value for value in (pressure, high_20d) if value is not None], default=None)
+    if prior_high is not None and prior_high > current:
+        targets = [
+            {"label": "T1", "price": round(prior_high, 4), "target_source": "prior_high", "reason": "前高/日线压力"},
+            {"label": "T2", "price": round(prior_high + atr, 4), "target_source": "prior_high", "reason": "压力突破后一倍 ATR"},
+            {"label": "T3", "price": round(prior_high + 2 * atr, 4), "target_source": "prior_high", "reason": "压力突破后二倍 ATR"},
+        ]
+        return {"complete": True, "method": "prior_high", "target_source": "prior_high", "targets": targets}
+
+    support = _positive_float(three_locks.get("support_level"))
+    swing_low = _positive_float(item.get("swing_low")) or support or max(current - 3 * atr, current * 0.9)
+    swing_high = _positive_float(item.get("swing_high")) or high_20d or current
+    pullback_low = _positive_float(item.get("pullback_low")) or support or max(current - atr, swing_low)
+    swing_range = max(swing_high - swing_low, atr)
+    fib_specs = (("T1", 1.272), ("T2", 1.618), ("T3", 2.0))
+    targets = [
+        {
+            "label": label,
+            "price": round(pullback_low + swing_range * ratio, 4),
+            "target_source": "fib_extension",
+            "reason": f"Fib {ratio:.3f}".rstrip("0").rstrip("."),
+        }
+        for label, ratio in fib_specs
+    ]
+    return {"complete": True, "method": "fib_extension", "target_source": "fib_extension", "targets": targets}
+
+
+def build_trade_level_plan(item: dict[str, Any]) -> dict[str, Any]:
+    current = _positive_float(item.get("current_price")) or 0.0
+    if current <= 0:
+        return {"complete": False, "target_plan": {"complete": False, "target_source": "unavailable", "targets": []}}
+    three_locks = item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {}
+    support = _positive_float(three_locks.get("support_level"))
+    pressure = _positive_float(three_locks.get("pressure_level"))
+    atr = _positive_float(item.get("atr14")) or current * (_positive_float(item.get("atr_pct")) or 0.03)
+    buy_level = support if support and support < current else current * 0.995
+    confirm_buy = pressure if pressure and pressure > current else current + 0.6 * atr
+    add_level = max(confirm_buy + 0.35 * atr, current + 0.9 * atr)
+    stop_loss = min((support * 0.985) if support else current - atr, buy_level - 0.45 * atr)
+    target_plan = build_target_plan(item)
+    complete = all(value > 0 for value in (buy_level, confirm_buy, add_level, stop_loss)) and bool(target_plan.get("complete"))
+    return {
+        "complete": complete,
+        "buy_level": round(buy_level, 4),
+        "confirm_buy": round(confirm_buy, 4),
+        "add_level": round(add_level, 4),
+        "stop_loss": round(stop_loss, 4),
+        "target_plan": target_plan,
+    }
+
+
 def create_price_engine(cfg: PriceEngineConfig | None = None):
     cfg = cfg or PriceEngineConfig()
 

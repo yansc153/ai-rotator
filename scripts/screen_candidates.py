@@ -32,12 +32,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from _common import PROJECT_ROOT, load_env_file
+from tradingagents.agents.rotation.company_concept import (
+    ashare_board,
+    market_board_label,
+    market_cap_gate,
+    verify_company_concept,
+    verify_company_concept_cached,
+)
 from tradingagents.agents.rotation.three_locks import evaluate_three_locks
 from tradingagents.runtime import read_fetch_manifest, today_cst
 
 UNIVERSE_CSV = ROOT / "data" / "universe_full.csv"
 DB_PATH      = ROOT / "data" / "daily_cache.db"
 OUTPUT_JSON  = ROOT / "data" / "candidates.json"
+CONCEPT_CACHE_JSON = ROOT / "data" / "concept_verification_cache.json"
 
 TOP_N = 150      # total candidates to keep
 MIN_DAYS = 3     # minimum days of history required in cache
@@ -387,6 +395,18 @@ def screen(top_n: int = TOP_N) -> list[dict]:
         sector = raw_tags.replace(",", ";").split(";")[0].strip() or market
         company_name = _safe_text(info.get("name", symbol), symbol)
         yf_symbol = _safe_text(info.get("yf_symbol", symbol), symbol)
+        market_cap = info.get("market_cap", 0)
+        concept_item = {
+            "symbol": symbol,
+            "company_name": company_name,
+            "market": market,
+            "sector": sector,
+            "sector_tags": raw_tags,
+            "chain_group": sector,
+            "market_cap": market_cap,
+        }
+        concept = verify_company_concept(concept_item)
+        cap_gate = market_cap_gate(market, market_cap)
 
         candidates.append({
             "symbol":              symbol,
@@ -412,7 +432,12 @@ def screen(top_n: int = TOP_N) -> list[dict]:
             "three_locks":         three_locks,
             "pool":                pool,
             "is_loss":             info.get("is_loss", 0),
-            "market_cap":          info.get("market_cap", 0),
+            "market_cap":          market_cap,
+            "market_cap_cny_billion": cap_gate["market_cap_cny_billion"],
+            "market_cap_ok":       cap_gate["market_cap_ok"],
+            "a_share_board":       ashare_board(symbol, market),
+            "market_board":        market_board_label(symbol, market),
+            **concept,
             "days_in_cache":       m["days_in_cache"],
             "llm_thesis":          "",
         })
@@ -422,6 +447,9 @@ def screen(top_n: int = TOP_N) -> list[dict]:
     # Preserve enough ambush/watch inventory for downstream swing/watch consumers
     # while keeping day_active as the clear primary pool.
     top = _select_candidates_with_diversity(candidates, top_n)
+    verify_top_n = int(os.getenv("AI_ROTATOR_CONCEPT_VERIFY_TOP_N", "20"))
+    for row in top[:max(0, verify_top_n)]:
+        row.update(verify_company_concept_cached(row, cache_path=CONCEPT_CACHE_JSON))
 
     print(f"Scored {len(candidates)} stocks → keeping top {len(top)}")
     pools: dict[str, int] = {}

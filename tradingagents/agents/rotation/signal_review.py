@@ -72,6 +72,8 @@ def signal_rows_from_payload(payload: dict[str, Any], *, include_avoid: bool = F
         for item in buckets.get(playbook, []) or []:
             if not isinstance(item, dict):
                 continue
+            if spec["side"] != "AVOID" and item.get("trade_language_allowed") is False:
+                continue
             push_price = _price(item)
             if push_price is None:
                 continue

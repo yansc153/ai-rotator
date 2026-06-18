@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Rotator tail_close session timer
+
+[Timer]
+Unit=ai-rotator@tail_close.service
+OnCalendar=Mon..Fri 14:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

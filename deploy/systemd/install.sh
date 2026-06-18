@@ -10,6 +10,7 @@ TIMERS=(
   "ai-rotator-morning.timer"
   "ai-rotator-ah-open.timer"
   "ai-rotator-midday.timer"
+  "ai-rotator-tail-close.timer"
   "ai-rotator-evening.timer"
 )
 
