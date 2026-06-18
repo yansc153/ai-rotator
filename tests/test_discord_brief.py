@@ -716,6 +716,58 @@ def test_discord_chunks_split_on_lines_when_possible():
     assert "\n".join(chunks).replace("\n\n", "\n") == text
 
 
+def test_danger_pool_is_summarized_for_discord():
+    danger_pool = [
+        {
+            "symbol": f"D{idx}",
+            "market": "CN",
+            "company_name": f"Danger {idx}",
+            "sector": "AI芯片",
+            "trade_style": "回避",
+            "execution_score": 10 - idx,
+            "current_price": 10 + idx,
+            "ret_5d": 0.1,
+            "company_concept": "人工智能",
+            "ai_relationship": "核心/直接 AI",
+            "concept_verified": True,
+            "market_cap_ok": False,
+            "reason": "market_cap_below_200b_cny",
+        }
+        for idx in range(7)
+    ]
+    payload = {
+        "date": "2026-05-05",
+        "session": "tail_close",
+        "leaders": ["AI芯片"],
+        "cross_market_signal": {"narrative": "无跨市场信号"},
+        "fresh_gate": {"ok": True},
+        "status_only": False,
+        "market_state": {},
+        "signal_review": {},
+        "opportunity_buckets": {
+            "premarket_open_sell": [],
+            "intraday_dip_reversal": [],
+            "overheat_failure_short": [],
+            "radar_watch": [],
+        },
+        "market_sections": {},
+        "danger_pool": danger_pool,
+        "mapping_chain": [],
+        "open_script": [],
+        "short_block": [],
+        "swing_block": [],
+        "coverage_watch": [],
+    }
+
+    text = build_brief_text("2026-05-05", "tail_close", payload=payload)
+
+    assert "只展示前5个风险样本" in text
+    assert "D0" in text
+    assert "D4" in text
+    assert "D5" not in text
+    assert "其余 2 只已进内部记录" in text
+
+
 def test_data_limited_earnings_title_changes():
     payloads = _fake_rotation_payloads()
 

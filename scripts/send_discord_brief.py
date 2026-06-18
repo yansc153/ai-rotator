@@ -143,6 +143,7 @@ def _sector_cn(code: str) -> str:
 
 DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
+DANGER_RENDER_LIMIT = 5
 MARKET_SECTION_ORDER = ("US", "HK", "CN")
 MARKET_SECTION_LABELS = {"US": "美股专区", "HK": "港股专区", "CN": "A股专区"}
 THREE_LOCK_LABELS = {
@@ -1534,12 +1535,16 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
 
     danger_pool = payload.get("danger_pool", [])
     if danger_pool:
+        visible_danger = danger_pool[:DANGER_RENDER_LIMIT]
+        hidden_count = len(danger_pool) - len(visible_danger)
         lines += [
             "",
-            f"▌ 禁区池｜看起来强，但盈亏比差 (共{len(danger_pool)}只)",
+            f"▌ 禁区池｜只展示前{len(visible_danger)}个风险样本 (共{len(danger_pool)}只)",
         ]
-        for idx, item in enumerate(danger_pool, start=1):
+        for idx, item in enumerate(visible_danger, start=1):
             lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+        if hidden_count > 0:
+            lines.append(f"其余 {hidden_count} 只已进内部记录，Discord 不展开。")
 
     mapping_chain = payload.get("mapping_chain", [])
     if mapping_chain:
