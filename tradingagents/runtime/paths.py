@@ -7,8 +7,19 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 
+
+def _workspace_data_dir(project_root: Path, workspace_root: Path) -> Path:
+    configured = os.getenv("AI_ROTATOR_DATA_DIR")
+    if configured:
+        path = Path(configured)
+        return path if path.is_absolute() else (project_root / path).resolve()
+    if workspace_root == Path("/"):
+        return project_root / "data"
+    return workspace_root / "data"
+
+
 REPO_DATA_DIR = PROJECT_ROOT / "data"
-WORKSPACE_DATA_DIR = WORKSPACE_ROOT / "data"
+WORKSPACE_DATA_DIR = _workspace_data_dir(PROJECT_ROOT, WORKSPACE_ROOT)
 RAW_DATA_DIR = WORKSPACE_DATA_DIR / "raw"
 DERIVED_DATA_DIR = WORKSPACE_DATA_DIR / "derived"
 

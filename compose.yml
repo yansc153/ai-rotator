@@ -9,6 +9,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       AI_ROTATOR_DB_PATH: ${AI_ROTATOR_DB_PATH:-storage/ai_rotator.db}
+      AI_ROTATOR_DATA_DIR: ${AI_ROTATOR_DATA_DIR:-/app/data}
       PYTHONUNBUFFERED: "1"
     volumes:
       - ./data:/app/data
