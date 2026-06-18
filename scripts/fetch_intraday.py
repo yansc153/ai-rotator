@@ -37,6 +37,7 @@ _US_TIMEOUT_S = 10
 _US_PREFLIGHT_TIMEOUT_S = 5
 _CNHK_TIMEOUT_S = 15
 _CNHK_RETRIES = 1
+_YF_CNHK_TIMEOUT_S = 10
 _US_EASTMONEY_PREFIX = "105"
 _FRESH_SESSION_FAIL_FAST_AFTER = 5
 
@@ -137,6 +138,43 @@ def fetch_us_intraday(symbol: str) -> bool:
         return False
 
 
+def _yahoo_symbol(market: str, symbol: str) -> str:
+    if market == "CN":
+        raw = symbol.split(".")[0]
+        suffix = symbol.split(".")[-1].upper() if "." in symbol else ""
+        yahoo_suffix = "SS" if suffix in {"SH", "SS"} or raw.startswith("6") else "SZ"
+        return f"{raw}.{yahoo_suffix}"
+    if market == "HK":
+        base = normalize_symbol_for_file("HK", symbol)
+        return f"{base[-4:]}.HK"
+    return symbol
+
+
+def _fetch_yfinance_intraday(market: str, symbol: str, output_symbol: str) -> bool:
+    import yfinance as yf
+
+    ticker = yf.Ticker(_yahoo_symbol(market, symbol))
+    try:
+        df = ticker.history(period="5d", interval="15m", auto_adjust=True, timeout=_YF_CNHK_TIMEOUT_S, prepost=False)
+        if df.empty:
+            return False
+        df = df.reset_index()
+        df.columns = [str(c).lower() for c in df.columns]
+        dt_col = "datetime" if "datetime" in df.columns else "date"
+        df = df.rename(columns={dt_col: "datetime"})
+        required = ["datetime", "open", "high", "low", "close", "volume"]
+        if any(col not in df.columns for col in required):
+            return False
+        df["datetime"] = df["datetime"].astype(str).str[:19]
+        out = RAW_DIR / f"{market}_{output_symbol}_15m.csv"
+        df[required].to_csv(out, index=False)
+        print(f"  {market} {output_symbol}: {len(df)} 15m bars via yfinance, latest={df['close'].iloc[-1]:.2f}", flush=True)
+        return True
+    except Exception as exc:
+        print(f"  {market} {output_symbol}: yfinance fallback failed — {exc}", flush=True)
+        return False
+
+
 def fetch_cn_intraday(symbol: str) -> bool:
     import time
     import akshare as ak
@@ -172,6 +210,8 @@ def fetch_cn_intraday(symbol: str) -> bool:
         except Exception as exc:
             last_exc = exc
             print(f"  CN {raw}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
+    if _fetch_yfinance_intraday("CN", symbol, raw):
+        return True
     print(f"  CN {raw}: FAILED — {last_exc}", flush=True)
     return False
 
@@ -212,6 +252,8 @@ def fetch_hk_intraday(symbol: str) -> bool:
         except Exception as exc:
             last_exc = exc
             print(f"  HK {base}: attempt {attempt}/{_CNHK_RETRIES} failed — {exc}", flush=True)
+    if _fetch_yfinance_intraday("HK", symbol, base):
+        return True
     print(f"  HK {base}: FAILED — {last_exc}", flush=True)
     return False
 
