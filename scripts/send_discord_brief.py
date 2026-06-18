@@ -155,8 +155,6 @@ DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
 PLAYBOOK_RENDER_LIMIT = 3
 DANGER_RENDER_LIMIT = 3
-MARKET_SECTION_ORDER = ("US", "HK", "CN")
-MARKET_SECTION_LABELS = {"US": "美股专区", "HK": "港股专区", "CN": "A股专区"}
 THREE_LOCK_LABELS = {
     "triple_lock": "日线强确认",
     "double_lock": "日线确认",
@@ -505,8 +503,8 @@ def _fmt_targets(item: dict[str, Any]) -> str:
     if not source:
         source = target_plan.get("method", "unavailable")
     if parts:
-        return f"卖出/减仓目标（{source}）：{"; ".join(parts)}"
-    return f"卖出/减仓目标（{source}）：未生成"
+        return f"卖出/减仓：{"；".join(parts)}｜算法 {source}"
+    return f"卖出/减仓：未生成｜算法 {source}"
 
 
 def _holding_plan(session: str) -> str:
@@ -552,14 +550,17 @@ def _board_key(board: str) -> tuple[int, str]:
     return 5, board
 
 
-def _session_sector_summary(payload: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+def _session_sector_summary(payload: dict[str, Any]) -> tuple[list[str], list[str]]:
+    buckets = payload.get("opportunity_buckets", {}) if isinstance(payload.get("opportunity_buckets"), dict) else {}
+    bucket_items = []
+    for key in ("premarket_open_sell", "intraday_dip_reversal"):
+        bucket_items.extend(item for item in buckets.get(key, []) or [] if isinstance(item, dict))
     tradable = payload.get("tradable_now", []) or []
     weak_pool = payload.get("watch_only", []) or []
     watchlist = payload.get("short_block", []) or []
-    all_items = tradable + weak_pool + watchlist
-
+    all_items = tradable + weak_pool + watchlist + bucket_items
     if not all_items:
-        return [], [], []
+        return [], []
 
     sector_scores: dict[str, float] = {}
     for item in all_items:
@@ -570,8 +571,8 @@ def _session_sector_summary(payload: dict[str, Any]) -> tuple[list[str], list[st
 
     tradable_sectors = {
         str(item.get("sector", ""))
-        for item in tradable
-        if str(item.get("sector", "")).strip()
+        for item in tradable + bucket_items
+        if str(item.get("sector", "")).strip() and item.get("trade_language_allowed")
     }
     tradable_order = sorted(tradable_sectors, key=lambda s: -sector_scores.get(s, 0.0))
     watch_sectors = {
@@ -580,9 +581,7 @@ def _session_sector_summary(payload: dict[str, Any]) -> tuple[list[str], list[st
         if str(item.get("sector", "")).strip() and str(item.get("sector", "")) not in tradable_sectors
     }
     watch_order = sorted(watch_sectors, key=lambda s: -sector_scores.get(s, 0.0))
-    if not tradable_order and watch_order:
-        return [], watch_order[:3], []
-    return tradable_order[:3], watch_order[:3], []
+    return tradable_order[:3], watch_order[:3]
 
 
 def _board_sections(items: list[dict[str, Any]], session: str) -> list[tuple[str, list[dict[str, Any]]]]:
@@ -600,7 +599,8 @@ def _board_sections(items: list[dict[str, Any]], session: str) -> list[tuple[str
     ordered: list[tuple[str, list[dict[str, Any]]]] = []
     for key in keys:
         ordered_items = sorted(groups[key], key=lambda item: float(item.get("execution_score", 0.0) or 0.0), reverse=True)
-        ordered.append((f"交易候选（交易级）｜{key}", ordered_items))
+        title = "今日可做" if any(item.get("trade_language_allowed") for item in ordered_items) else "观察池"
+        ordered.append((f"{title}｜{key}", ordered_items))
     return ordered
 
 
@@ -1426,59 +1426,40 @@ def _fmt_bucket_item(item: dict[str, Any], session: str = "morning") -> str:
     if item.get("trade_language_allowed") and item.get("push_decision") == "tradable_now":
         levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
         target_line = _fmt_targets(item)
-        level_line = f"进场 {_fmt_price(levels.get('buy_level'))}（确认 {_fmt_price(levels.get('confirm_buy'))}）｜加仓 {_fmt_price(levels.get('add_level'))}｜止损 {_fmt_price(levels.get('stop_loss'))}"
+        level_line = f"买入 {_fmt_price(levels.get('buy_level'))}｜确认 {_fmt_price(levels.get('confirm_buy'))}｜加仓 {_fmt_price(levels.get('add_level'))}｜止损 {_fmt_price(levels.get('stop_loss'))}"
         return "\n".join(
             [
                 f"{item.get('symbol')} {name} [{board}]",
-                f"   赛道：{concept}｜AI关系：{ai_rel}",
+                f"   {concept}｜AI：{ai_rel}｜15m",
                 f"   {level_line}",
-                f"   持仓：{_holding_plan(session)}｜{target_line}",
-                f"   触发：{reason}",
+                f"   {target_line}",
+                f"   周期：{_holding_plan(session)}｜因：{reason}",
             ]
         )
 
     notes = []
     if item.get("push_decision") == "watch_only":
-        notes.append("交易级条件未完全满足，先观察")
+        notes.append("未触发")
     elif item.get("push_decision") == "rejected":
-        notes.append("今日不做")
+        notes.append("不做")
     if not item.get("concept_verified"):
-        notes.append(f"概念核验：{item.get('concept_status', '未通过')}")
+        notes.append(f"概念 {item.get('concept_status', '未通过')}")
     if not item.get("market_cap_ok", True):
-        notes.append("市值未达 200 亿人民币等值")
-    note_text = " | ".join(notes)
-    suffix = f" | {note_text}" if note_text else ""
+        notes.append("市值不足")
+    note_text = "｜".join(notes)
+    suffix = f"｜{note_text}" if note_text else ""
     return (
         f"{item.get('symbol')} {name} [{board}]"
-        f"\n   赛道：{concept}｜AI关系：{ai_rel}｜当前价：{_fmt_price(item.get('current_price'))}{suffix}"
-        f"\n   观察：{reason if reason else '先等待触发条件'}"
+        f"\n   {concept}｜AI：{ai_rel}｜现价 {_fmt_price(item.get('current_price'))}{suffix}"
+        f"\n   等：{reason if reason else '新触发'}"
     )
-
-
-def _dedupe_state_part(prefix: str, value: str | None) -> str | None:
-    if not value:
-        return None
-    clean = value.strip()
-    if prefix == "宽度" and clean.startswith("主线"):
-        return clean.replace("主线", "宽度", 1)
-    if clean.startswith("宽度"):
-        return clean
-    if clean.startswith("主线") and prefix == "主线":
-        return clean
-    if prefix == "宽度" and clean == "主线分化":
-        return "宽度分化"
-    if prefix == "宽度" and clean.startswith("指数"):
-        return f"宽度{clean}"
-    if value.startswith(prefix):
-        return clean
-    return f"{prefix}{clean}"
 
 
 def _append_bucket_lines(lines: list[str], title: str, items: list[dict[str, Any]], max_items: int = 3, session: str = "morning") -> None:
     lines.append("")
     lines.append(f"▌ {title} (共{len(items)}只)")
     if not items:
-        lines.append("无样本")
+        lines.append("无")
         return
     for idx, item in enumerate(items[:max_items], start=1):
         rendered = _fmt_bucket_item(item, session=session)
@@ -1488,82 +1469,7 @@ def _append_bucket_lines(lines: list[str], title: str, items: list[dict[str, Any
             prefix = f"#{idx} " if line_i == 0 else "   "
             lines.append(f"{prefix}{line}")
     if len(items) > max_items:
-        lines.append(f"其余 {len(items)-max_items} 只见 ledger，不再展开。")
-
-
-def _hidden_playbook_line(items: list[dict[str, Any]]) -> str:
-    symbols = [str(item.get("symbol")) for item in items if item.get("symbol")]
-    if len(symbols) <= 6 and symbols:
-        return f"其余 {len(items)} 只：{', '.join(symbols)} 已进内部记录，Discord 不展开。"
-    return f"其余 {len(items)} 只已进内部记录，Discord 不展开。"
-
-
-def _fmt_review_pct(value: Any) -> str:
-    if value is None:
-        return "暂无"
-    try:
-        return f"{float(value):+.1%}"
-    except (TypeError, ValueError):
-        return "暂无"
-
-
-def _fmt_review_item(item: dict[str, Any]) -> str:
-    side = item.get("side", "LONG")
-    side_label = "空" if side == "SHORT" else "多"
-    raw = _fmt_review_pct(item.get("raw_return_pct"))
-    trade = _fmt_review_pct(item.get("trade_return_pct"))
-    symbol = item.get("symbol", "")
-    price = _fmt_price(item.get("current_price"))
-    push = _fmt_price(item.get("push_price"))
-    playbook = str(item.get("playbook", "")).replace("_", "/")
-    if side == "SHORT":
-        return f"{symbol} [{side_label}·{playbook}] 推送 {push} -> 现价 {price} | 股价 {raw} | 交易口径 {trade}"
-    return f"{symbol} [{side_label}·{playbook}] 推送 {push} -> 现价 {price} | 涨跌 {raw}"
-
-
-def _append_review_section(lines: list[str], title: str, summary: dict[str, Any]) -> None:
-    signal_count = int(summary.get("signal_count", 0) or 0)
-    priced_count = int(summary.get("priced_count", 0) or 0)
-    if signal_count <= 0 or priced_count <= 0:
-        return
-    lines += [
-        "",
-        f"▌ {title}",
-        (
-            f"{summary.get('window', '')}推送 {signal_count} 个，已计价 {priced_count} 个 | "
-            f"胜率 {_fmt_review_pct(summary.get('win_rate'))} | "
-            f"平均涨跌 {_fmt_review_pct(summary.get('avg_raw_return_pct'))}"
-        ),
-    ]
-    top = summary.get("top", []) or []
-    laggard = summary.get("laggard", []) or []
-    if top:
-        lines.append("表现最好：" + "；".join(_fmt_review_item(item) for item in top[:3]))
-    if laggard:
-        lines.append("需要复盘：" + "；".join(_fmt_review_item(item) for item in laggard[:2]))
-
-
-def _build_market_sections(classified: list[dict[str, Any]], *, per_market: int = 3) -> dict[str, dict[str, Any]]:
-    decision_rank = {"tradable_now": 0, "watch_only": 1, "rejected": 2}
-    sections: dict[str, dict[str, Any]] = {}
-    for market in MARKET_SECTION_ORDER:
-        rows = [item for item in classified if item.get("market") == market]
-        rows.sort(
-            key=lambda item: (
-                decision_rank.get(str(item.get("push_decision")), 9),
-                -float(item.get("execution_score", 0.0) or 0.0),
-                -float((item.get("three_locks") or {}).get("score", 0.0) if isinstance(item.get("three_locks"), dict) else 0.0),
-            )
-        )
-        selected = rows[:per_market]
-        sections[market] = {
-            "label": MARKET_SECTION_LABELS.get(market, market),
-            "items": selected,
-            "tradable_count": len([item for item in selected if item.get("push_decision") == "tradable_now"]),
-            "watch_count": len([item for item in selected if item.get("push_decision") == "watch_only"]),
-            "avoid_count": len([item for item in selected if item.get("push_decision") == "rejected"]),
-        }
-    return sections
+        lines.append(f"另 {len(items)-max_items} 只见内部记录。")
 
 
 def _three_locks_summary(classified: list[dict[str, Any]]) -> str:
@@ -1581,59 +1487,34 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
 
     meta = _session_meta(session)
     leaders = " > ".join(_sector_cn(s) for s in payload["leaders"]) if payload["leaders"] else "无"
-    signal = payload["cross_market_signal"]
-    signal_text = signal.get("narrative", "无跨市场信号")
     staleness = _data_staleness_note()
 
     lines = [
         f"{meta['label']} · {date_str}",
-        f"({meta['caption']})",
     ]
-    if signal_text != "无跨市场信号":
-        lines.append(f"跨市场信号：{signal_text}")
-    if leaders:
-        lines.append(f"今日活跃概念：{leaders}")
     if staleness:
         lines.append(staleness)
 
-    strong_sectors, weak_sectors, weak_with_edge = _session_sector_summary(payload)
-    if strong_sectors:
-        lines.append("重点看：" + " > ".join(strong_sectors))
-    if weak_sectors:
-        lines.append("弱势赛道里有强势标的：" + " > ".join(weak_sectors))
-    if weak_with_edge:
-        lines.append("边缘机会：" + " > ".join(weak_with_edge))
+    strong_sectors, watch_sectors = _session_sector_summary(payload)
+    lines.append("强势赛道：" + (" > ".join(strong_sectors) if strong_sectors else "暂无交易级确认"))
+    if watch_sectors:
+        lines.append("弱势赛道有强票：" + " > ".join(watch_sectors))
+    elif leaders:
+        lines.append(f"重点观察：{leaders}")
 
     buckets = payload.get("opportunity_buckets", {})
     premarket_open_sell = [item for item in buckets.get("premarket_open_sell", []) if isinstance(item, dict)]
     intraday_dip_reversal = [item for item in buckets.get("intraday_dip_reversal", []) if isinstance(item, dict)]
     overheat_failure_short = [item for item in buckets.get("overheat_failure_short", []) if isinstance(item, dict)]
-    radar_watch = [item for item in buckets.get("radar_watch", []) if isinstance(item, dict)]
-
-    if session == "tail_close":
-        _append_bucket_lines(
-            lines,
-            "交易候选（交易级）｜尾盘承接",
-            premarket_open_sell + intraday_dip_reversal,
-            max_items=PLAYBOOK_RENDER_LIMIT,
-            session=session,
-        )
-        if overheat_failure_short:
-            _append_bucket_lines(lines, "风险观察（先避开）", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
-        if radar_watch:
-            _append_bucket_lines(lines, "观察雷达", radar_watch, max_items=DANGER_RENDER_LIMIT, session=session)
+    candidates = premarket_open_sell + intraday_dip_reversal
+    board_sections = _board_sections(candidates, session)
+    if board_sections:
+        for key, group_items in board_sections:
+            _append_bucket_lines(lines, key, group_items, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
     else:
-        candidates = premarket_open_sell + intraday_dip_reversal
-        board_sections = _board_sections(candidates, session)
-        if board_sections:
-            for key, group_items in board_sections:
-                _append_bucket_lines(lines, key, group_items, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
-        else:
-            _append_bucket_lines(lines, "交易候选（交易级）", candidates, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
-        if radar_watch:
-            _append_bucket_lines(lines, "观察雷达", radar_watch, max_items=DANGER_RENDER_LIMIT, session=session)
-        if overheat_failure_short:
-            _append_bucket_lines(lines, "风险观察（先避开）", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
+        _append_bucket_lines(lines, "今日可做", candidates, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
+    if overheat_failure_short:
+        _append_bucket_lines(lines, "风险观察", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
 
     if not premarket_open_sell and not intraday_dip_reversal and not overheat_failure_short:
         tradable_now = [item for item in payload.get("tradable_now", []) if item.get("trade_language_allowed")]

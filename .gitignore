@@ -16,6 +16,7 @@ skills-lock.json
 # Generated per-run — do not commit
 data/daily_cache.db
 data/candidates.json
+data/concept_verification_cache.json
 data/earnings_plays.json
 data/fetch_status.json
 data/raw/

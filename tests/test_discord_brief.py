@@ -178,8 +178,8 @@ def _build_payload_with_fixtures(date_str: str, session: str = "morning") -> dic
 def test_brief_contains_required_sections():
     text = _build_text_with_fixtures("2026-05-05")
     assert "盘前早报" in text
-    assert "今日活跃概念" in text
-    assert "跨市场信号" in text
+    assert "强势赛道" in text
+    assert "弱势赛道有强票" in text
 
 
 def test_brief_has_date_header():
@@ -306,10 +306,11 @@ def test_trade_card_requires_company_name_and_level_sources():
     }
     text = build_brief_text("2026-05-05", "midday", payload=payload)
     assert "688256.SH 寒武纪 [A股·科创板]" in text
-    assert "进场 116.00（确认 125.00）" in text
-    assert "卖出/减仓目标（fvg_gap）" in text
+    assert "买入 116.00｜确认 125.00" in text
+    assert "卖出/减仓：" in text
+    assert "算法 fvg_gap" in text
     assert "T1 130.00（上方 FVG/gap下沿）" in text
-    assert "AI关系：核心/直接 AI" in text
+    assert "AI：核心/直接 AI" in text
 
 
 # ─── staleness warning ────────────────────────────────────────────────────
@@ -401,7 +402,7 @@ def test_build_brief_text_sessions_have_different_headers():
     assert "盘前早报" in m
     assert "午间交易计划" in d
     assert "AI赛道短线精灵" in e
-    assert "交易候选（交易级）" in e
+    assert "观察池" in e
 
 
 def test_midday_excludes_us_stocks():
@@ -470,7 +471,7 @@ def test_evening_watchlist_fills_from_candidate_set_to_five():
 
 def test_evening_watchlist_text_uses_layers_not_entry_command():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "交易候选（交易级）" in text
+    assert "观察池" in text
     assert "回到" in text
     assert "仍有承接" in text
     assert "买入 " not in text
@@ -491,7 +492,7 @@ def test_evening_omits_bottleneck_from_payload_and_text():
 
 def test_evening_renders_decision_sections_and_preserves_watchlist():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "交易候选（交易级）" in text
+    assert "观察池" in text
     assert "关键映射链" not in text
     assert "开盘脚本" not in text
     assert "日线结构：" not in text
@@ -559,12 +560,12 @@ def test_brief_renders_market_coverage_watchlist():
         text = build_brief_text("2026-05-05", "morning")
 
     assert "盘前早报" in text
-    assert "今日活跃概念" in text
+    assert "强势赛道" in text
 
 
 def test_morning_now_renders_short_and_swing_blocks():
     text = _build_text_with_fixtures("2026-05-05", "morning")
-    assert "交易候选（交易级）" in text
+    assert "观察池" in text
     assert "短线 1-2天" not in text
 
 
