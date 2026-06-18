@@ -33,9 +33,9 @@ _START_DAYS = 7  # pull last 7 calendar days of 1h bars
 _AKSHARE_SLEEP = 1.2  # seconds between akshare intraday calls to avoid rate limits
 _US_TIMEOUT_S = 10
 _US_PREFLIGHT_TIMEOUT_S = 5
-_CNHK_RETRIES = 3
+_CNHK_RETRIES = 1
 _US_EASTMONEY_PREFIX = "105"
-_FRESH_SESSION_FAIL_FAST_AFTER = 8
+_FRESH_SESSION_FAIL_FAST_AFTER = 5
 
 SESSION_MARKETS = {
     "morning": {"CN", "HK", "US"},
