@@ -751,7 +751,7 @@ def _build_market_state(
 
     summary = (
         f"当前更像{regime}，主线状态为{mainline_health}，宽度表现为{breadth}。"
-        f"今日可看：开盘强势 {len(premarket_open_sell)} 个，"
+        f"今日可看：强势延续 {len(premarket_open_sell)} 个，"
         f"回踩承接 {len(intraday_dip_reversal)} 个，"
         f"过热转弱 {len(overheat_failure_short)} 个。"
         f"行动倾向：{action_bias}；不满足触发就不做。"
@@ -798,6 +798,20 @@ def _build_open_script(
             script.append(f"过热转弱只盯 {', '.join(short_leaders)}：高位跌破关键日内区间且相对指数转弱，才进入风险观察。")
         if mapping_chain:
             script.append(f"最后看 {mapping_chain[0]['mapped_asset']} 这条映射链能否被次日 A/H 真实交易，不成立就只保留观察。")
+        return script
+
+    if session == "tail_close":
+        script = [
+            f"尾盘只看承接是否延续，别在 {market_state['regime']} 状态里反向硬做。",
+        ]
+        if strength_leaders:
+            script.append(f"强势延续：{', '.join(strength_leaders)} 14:30 后仍站稳关键位才继续看。")
+        if dip_leaders:
+            script.append(f"回踩确认：{', '.join(dip_leaders)} 只看尾盘承接，不追高。")
+        if short_leaders:
+            script.append(f"风险回避：{', '.join(short_leaders)} 转弱就不碰。")
+        if mapping_chain:
+            script.append(f"最后确认 {mapping_chain[0]['driver']} -> {mapping_chain[0]['mapped_asset']} 的映射是否成立，避免只追概念。")
         return script
 
     script = [
@@ -1451,9 +1465,10 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     radar_watch = buckets.get("radar_watch", [])
     if has_playbook_buckets:
         if premarket_open_sell:
+            strength_title = "强势延续｜尾盘承接" if session == "tail_close" else "强势确认｜开盘承接"
             lines += [
                 "",
-                f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
+                f"▌ {strength_title} (共{len(premarket_open_sell)}只)",
             ]
             visible = premarket_open_sell[:PLAYBOOK_RENDER_LIMIT]
             for idx, item in enumerate(visible, start=1):
@@ -1591,7 +1606,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     if open_script:
         lines += [
             "",
-            "▌ 开盘脚本",
+            "▌ 尾盘执行" if session == "tail_close" else "▌ 开盘脚本",
         ]
         for idx, step in enumerate(open_script, start=1):
             lines.append(f"{idx}. {step}")

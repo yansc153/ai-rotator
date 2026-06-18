@@ -829,7 +829,7 @@ def test_tail_close_omits_non_trader_context():
             }
         ],
         "mapping_chain": [],
-        "open_script": [],
+        "open_script": ["尾盘只看承接"],
         "short_block": [],
         "swing_block": [],
         "coverage_watch": [],
@@ -842,6 +842,10 @@ def test_tail_close_omits_non_trader_context():
     assert "近三日信号复盘" not in text
     assert "日线结构" not in text
     assert "强势确认｜开盘承接" not in text
+    assert "开盘脚本" not in text
+    assert "开盘强势" not in text
+    assert "开盘承接" not in text
+    assert "尾盘执行" in text
     assert "雷达｜高波动观察" not in text
     assert "禁区池" not in text
     assert "001287.SZ" in text
