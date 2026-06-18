@@ -59,3 +59,15 @@ def test_fresh_gate_focus_markets_filters_non_focus_records(tmp_path, monkeypatc
 
     assert gate["ok"] is True
     assert "intraday_not_fresh" not in gate["reason_codes"]
+
+
+def test_freshness_gate_items_excludes_rejected_names():
+    items = [
+        {"symbol": "GOOD", "push_decision": "tradable_now"},
+        {"symbol": "WATCH", "push_decision": "watch_only"},
+        {"symbol": "BAD", "push_decision": "rejected"},
+    ]
+
+    result = brief._freshness_gate_items(items)
+
+    assert [item["symbol"] for item in result] == ["GOOD", "WATCH"]

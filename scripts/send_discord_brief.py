@@ -243,6 +243,10 @@ def _fresh_gate_status(date_str: str, session: str, freshness_manifest: list[dic
     return {"ok": not reason_codes, "reason_codes": reason_codes, "strict_today": True}
 
 
+def _freshness_gate_items(classified: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in classified if item.get("push_decision") != "rejected"]
+
+
 def _status_text(date_str: str, session: str, payload: dict[str, Any]) -> str:
     meta = _session_meta(session)
     reasons = payload.get("fresh_gate", {}).get("reason_codes", []) or ["data_not_ready"]
@@ -1207,7 +1211,7 @@ def build_brief_payload(date_str: str, session: str = "morning") -> dict[str, An
         if len(leaders) >= 3:
             break
     signal = (ah["cross_market_signals"] or us["cross_market_signals"] or [{}])[0]
-    freshness_manifest = build_freshness_manifest(all_recs, session, date_str)
+    freshness_manifest = build_freshness_manifest(_freshness_gate_items(classified), session, date_str)
     fresh_gate = _fresh_gate_status(date_str, session, freshness_manifest)
     market_state, opportunity_buckets, danger_pool, mapping_chain, open_script = _build_decision_layers(
         us_rotation=us,
