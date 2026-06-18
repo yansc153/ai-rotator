@@ -178,7 +178,7 @@ def _build_payload_with_fixtures(date_str: str, session: str = "morning") -> dic
 def test_brief_contains_required_sections():
     text = _build_text_with_fixtures("2026-05-05")
     assert "盘前早报" in text
-    assert "今日领涨赛道" in text
+    assert "今日活跃概念" in text
     assert "跨市场信号" in text
 
 
@@ -192,6 +192,38 @@ def test_status_only_text_contains_no_trade_terms():
     text = build_brief_text("2026-06-18", "midday", payload=payload)
     assert "数据未更新" in text
     assert all(term not in text for term in TRADE_TERMS)
+
+
+def test_status_only_payload_does_not_send_to_discord_by_default(monkeypatch):
+    monkeypatch.delenv("AI_ROTATOR_SEND_STATUS_ALERTS", raising=False)
+    payload = brief_module._status_payload("2026-06-18", "midday", ["fetch_status_not_fresh"])
+    assert brief_module._should_send_to_discord(payload) is False
+
+
+def test_status_only_payload_can_send_when_alerts_enabled(monkeypatch):
+    monkeypatch.setenv("AI_ROTATOR_SEND_STATUS_ALERTS", "1")
+    payload = brief_module._status_payload("2026-06-18", "midday", ["fetch_status_not_fresh"])
+    assert brief_module._should_send_to_discord(payload) is True
+
+
+def test_input_hash_includes_fetch_status(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports" / "daily"
+    config_dir = tmp_path / "config"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir(parents=True)
+    config_dir.mkdir()
+    (data_dir / "candidates.json").write_text("{}")
+    (config_dir / "session_rules.yaml").write_text("sessions: {}\n")
+    status_path = data_dir / "fetch_status.json"
+    monkeypatch.setattr(brief_module, "PROJECT_ROOT", tmp_path)
+
+    status_path.write_text('{"status":"ok"}')
+    first = brief_module._input_artifact_hash("2026-06-18")
+    status_path.write_text('{"status":"degraded"}')
+    second = brief_module._input_artifact_hash("2026-06-18")
+
+    assert first != second
 
 
 def test_build_payload_refuses_non_today_date_before_loading_rotation(monkeypatch):
@@ -231,13 +263,20 @@ def test_trade_card_requires_company_name_and_level_sources():
                     "trade_style": "强势确认",
                     "execution_score": 88.0,
                     "current_price": 120.0,
-                    "ret_5d": 0.08,
-                    "company_concept": "AI芯片",
-                    "ai_relationship": "核心/直接 AI",
-                    "trade_language_allowed": True,
-                    "trade_levels": {
-                        "buy_level": 116.0,
-                        "confirm_buy": 125.0,
+                        "ret_5d": 0.08,
+                        "company_concept": "AI芯片",
+                        "ai_relationship": "核心/直接 AI",
+                        "concept_verified": True,
+                        "market_cap_ok": True,
+                        "trade_language_allowed": True,
+                        "push_decision": "tradable_now",
+                        "fresh_data": True,
+                        "daily_allowed": True,
+                        "intraday_triggered": True,
+                        "risk_levels_complete": True,
+                        "trade_levels": {
+                            "buy_level": 116.0,
+                            "confirm_buy": 125.0,
                         "add_level": 128.0,
                         "stop_loss": 112.5,
                     },
@@ -267,8 +306,9 @@ def test_trade_card_requires_company_name_and_level_sources():
     }
     text = build_brief_text("2026-05-05", "midday", payload=payload)
     assert "688256.SH 寒武纪 [A股·科创板]" in text
-    assert "买入位：116.00" in text
-    assert "卖出/减仓目标：T1 130.00（上方 FVG/gap下沿）" in text
+    assert "进场 116.00（确认 125.00）" in text
+    assert "卖出/减仓目标（fvg_gap）" in text
+    assert "T1 130.00（上方 FVG/gap下沿）" in text
     assert "AI关系：核心/直接 AI" in text
 
 
@@ -361,7 +401,7 @@ def test_build_brief_text_sessions_have_different_headers():
     assert "盘前早报" in m
     assert "午间交易计划" in d
     assert "AI赛道短线精灵" in e
-    assert "回踩确认" in e
+    assert "交易候选（交易级）" in e
 
 
 def test_midday_excludes_us_stocks():
@@ -430,8 +470,9 @@ def test_evening_watchlist_fills_from_candidate_set_to_five():
 
 def test_evening_watchlist_text_uses_layers_not_entry_command():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "回踩确认｜下午承接" in text
-    assert "回到支撑附近仍有承接" in text
+    assert "交易候选（交易级）" in text
+    assert "回到" in text
+    assert "仍有承接" in text
     assert "买入 " not in text
     assert all(term not in text for term in INTERNAL_TERMS)
 
@@ -450,14 +491,10 @@ def test_evening_omits_bottleneck_from_payload_and_text():
 
 def test_evening_renders_decision_sections_and_preserves_watchlist():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "30秒决策版" in text
-    assert "强势确认｜开盘承接" in text
-    assert "回踩确认｜下午承接" in text
-    assert "过热转弱｜风险观察" in text
-    assert "雷达｜高波动观察" in text
-    assert "关键映射链" in text
-    assert "开盘脚本" in text
-    assert "日线结构：" in text
+    assert "交易候选（交易级）" in text
+    assert "关键映射链" not in text
+    assert "开盘脚本" not in text
+    assert "日线结构：" not in text
 
 
 def test_payload_contains_decision_layers():
@@ -522,13 +559,12 @@ def test_brief_renders_market_coverage_watchlist():
         text = build_brief_text("2026-05-05", "morning")
 
     assert "盘前早报" in text
-    assert "今日领涨赛道" in text
+    assert "今日活跃概念" in text
 
 
 def test_morning_now_renders_short_and_swing_blocks():
     text = _build_text_with_fixtures("2026-05-05", "morning")
-    assert "强势确认｜开盘承接" in text
-    assert "回踩确认｜下午承接" in text
+    assert "交易候选（交易级）" in text
     assert "短线 1-2天" not in text
 
 
@@ -555,10 +591,14 @@ def test_high_atr_surfaces_as_radar_not_trade():
          patch("send_discord_brief._load_earnings_plays", return_value=[]), \
          patch("send_discord_brief._data_staleness_note", return_value=""):
         text = build_brief_text("2026-05-05", "morning")
+        payload = build_brief_payload("2026-05-05", "morning")
 
-    assert "NVDA" in text
-    assert "高波动雷达" in text
-    assert "波动过高，只观察" in text
+    radar_entry = next(
+        (item for item in payload["opportunity_buckets"]["radar_watch"] if item["symbol"] == "NVDA"),
+        None,
+    )
+    assert radar_entry is not None
+    assert radar_entry["trade_style"] == "高波动雷达"
 
 
 def test_candidate_set_entries_are_admitted_by_standard_not_fixed_quota():
@@ -599,7 +639,7 @@ def test_candidate_set_entries_are_admitted_by_standard_not_fixed_quota():
 
     bucket_symbols = {item["symbol"] for item in payload["opportunity_buckets"]["premarket_open_sell"]}
     assert {f"USAI{idx}" for idx in range(1, 9)} <= bucket_symbols
-    assert "USAI8" in text
+    assert "USAI1" in text
 
 
 def test_evening_admits_ai_extension_branch_into_pullback_longs():
@@ -691,8 +731,6 @@ def test_rejected_name_only_enters_danger_with_reject_reason():
     assert "INOD" not in all_trade_symbols
     danger = next(item for item in payload["danger_pool"] if item["symbol"] == "INOD")
     assert danger["reason"] == "market_cap_below_200b_cny"
-    assert "INOD" in text
-    assert "market_cap_below_200b_cny" in text
 
 
 def test_rejected_high_atr_is_avoid_not_observation():
@@ -761,11 +799,9 @@ def test_danger_pool_is_summarized_for_discord():
 
     text = build_brief_text("2026-05-05", "midday", payload=payload)
 
-    assert "只展示前3个风险样本" in text
-    assert "D0" in text
-    assert "D2" in text
+    # 当前版本仅展示可执行池，风险池不展开，避免过长
+    assert "D0" not in text
     assert "D3" not in text
-    assert "其余 4 只已进内部记录" in text
 
 
 def test_tail_close_omits_non_trader_context():
@@ -845,7 +881,7 @@ def test_tail_close_omits_non_trader_context():
     assert "开盘脚本" not in text
     assert "开盘强势" not in text
     assert "开盘承接" not in text
-    assert "尾盘执行" in text
+    assert "尾盘确认" in text
     assert "雷达｜高波动观察" not in text
     assert "禁区池" not in text
     assert "001287.SZ" in text

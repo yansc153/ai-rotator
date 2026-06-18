@@ -27,6 +27,7 @@ import time
 import warnings
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+import argparse
 
 import requests
 import pandas as pd
@@ -76,9 +77,22 @@ def _previous_business_days(day: date, count: int) -> list[date]:
     return days
 
 
-def _accepted_trade_dates(market: str, now: datetime | None = None) -> set[str]:
+def _accepted_trade_dates(
+    market: str,
+    now: datetime | None = None,
+    *,
+    session: str | None = None,
+) -> set[str]:
     current = (now or datetime.now(_CST)).astimezone(_CST).date()
     prev = _previous_business_day(current)
+    if market == "CN" and session == "midday":
+        return {str(current)}
+    if market == "CN" and session == "tail_close":
+        return {str(current)}
+    if market == "HK" and session == "midday":
+        return {str(current)}
+    if market == "HK" and session == "tail_close":
+        return {str(current)}
     if market == "US":
         # US holidays are not captured by a simple weekday calendar. Accept a
         # short prior-business-day window so Monday holidays still use Friday's
@@ -657,6 +671,15 @@ def fetch_us(universe: pd.DataFrame, conn: sqlite3.Connection) -> int:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--session",
+        choices={"morning", "ah_open", "midday", "tail_close", "evening"},
+        default=None,
+        help="Optional pipeline session for freshness window selection.",
+    )
+    args = parser.parse_args()
+
     load_env_file()
 
     if not UNIVERSE_CSV.exists():
@@ -685,7 +708,7 @@ def main() -> None:
     for market, exp in expected.items():
         if exp <= 0:
             continue
-        accepted_dates = _accepted_trade_dates(market)
+        accepted_dates = _accepted_trade_dates(market, session=args.session)
         latest_date, covered = _effective_market_coverage(conn, market, accepted_dates)
         ratio = covered / exp
         effective[market] = {

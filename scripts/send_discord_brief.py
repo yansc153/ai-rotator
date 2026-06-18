@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time as dtime, timezone, timedelta
 from typing import Any
 from uuid import uuid4
 import certifi
@@ -50,7 +50,7 @@ def _session_meta(session: str) -> dict[str, Any]:
         raise RuntimeError(f"session_rules missing send_to_discord for session={session}")
     return meta
 
-def _load_intraday_overlay(market: str, symbol: str) -> dict[str, float]:
+def _load_intraday_overlay(market: str, symbol: str, session: str = "morning") -> dict[str, float]:
     """Return {ret_intraday, overextended} from latest 1h CSV for today.
 
     ret_intraday = (last_bar_close - first_bar_close_today) / first_bar_close_today
@@ -70,6 +70,16 @@ def _load_intraday_overlay(market: str, symbol: str) -> dict[str, float]:
         today_str = _today_cst()
         today_bars = df[df["datetime"].str.startswith(today_str)]
         if today_bars.empty:
+            return {"ret_intraday": 0.0, "overextended": False}
+        latest_ts = pd.to_datetime(today_bars.iloc[-1]["datetime"], errors="coerce")
+        if latest_ts is None or pd.isna(latest_ts):
+            return {"ret_intraday": 0.0, "overextended": False}
+        overlay_cutoff = {"midday": dtime(11, 0), "tail_close": dtime(14, 0)}.get(session)
+        if overlay_cutoff is not None and (latest_ts.hour, latest_ts.minute, latest_ts.second) < (
+            overlay_cutoff.hour,
+            overlay_cutoff.minute,
+            overlay_cutoff.second,
+        ):
             return {"ret_intraday": 0.0, "overextended": False}
         open_close = float(today_bars.iloc[0]["close"])
         last_close = float(today_bars.iloc[-1]["close"])
@@ -107,7 +117,7 @@ def _session_score(item: dict[str, Any], session: str) -> float:
         overbought_penalty = 0.0
 
     # 2 & 3. Intraday overlay
-    intraday = _load_intraday_overlay(item.get("market", "US"), item.get("symbol", ""))
+    intraday = _load_intraday_overlay(item.get("market", "US"), item.get("symbol", ""), session)
     ret_id = intraday["ret_intraday"]
     intraday_weight = cfg["intraday_weight"]
 
@@ -174,7 +184,7 @@ AI_ROTATION_KEYWORDS = (
     "云计算",
 )
 def _status_payload(date_str: str, session: str, reason_codes: list[str]) -> dict[str, Any]:
-    return {
+    payload = {
         "run_id": str(uuid4()),
         "date": date_str,
         "session": session,
@@ -201,9 +211,12 @@ def _status_payload(date_str: str, session: str, reason_codes: list[str]) -> dic
         "send_status": "status_only",
         "contract_version": CONTRACT_VERSION,
     }
+    PushPayload.model_validate(payload)
+    return payload
 
 
 def _fresh_gate_status(date_str: str, session: str, freshness_manifest: list[dict[str, Any]]) -> dict[str, Any]:
+    meta = _session_meta(session)
     reason_codes: list[str] = []
     if date_str != _today_cst():
         return {"ok": False, "reason_codes": ["requested_date_not_today"], "strict_today": True}
@@ -220,9 +233,12 @@ def _fresh_gate_status(date_str: str, session: str, freshness_manifest: list[dic
     except Exception:
         reason_codes.append("candidates_missing")
 
-    if _session_meta(session).get("require_fresh_intraday", False):
+    if meta.get("require_fresh_intraday", False):
         records = freshness_manifest or []
-        if not records or not any(record.get("intraday_status") == "fresh" for record in records):
+        focus = meta.get("focus_markets")
+        if focus is not None:
+            records = [record for record in records if record.get("market") in focus]
+        if not records or any(record.get("intraday_status") != "fresh" for record in records):
             reason_codes.append("intraday_not_fresh")
 
     return {"ok": not reason_codes, "reason_codes": reason_codes, "strict_today": True}
@@ -467,6 +483,125 @@ def _item_reason(item: dict[str, Any]) -> str:
         return "注意 " + " / ".join(str(x) for x in warnings[:2])
     sector = _sector_cn(item.get("sector", ""))
     return f"{sector} 方向继续观察"
+
+
+def _fmt_targets(item: dict[str, Any]) -> str:
+    target_plan = item.get("target_plan") if isinstance(item.get("target_plan"), dict) else {}
+    targets = target_plan.get("targets") if isinstance(target_plan.get("targets"), list) else []
+    if not targets:
+        return "目标未生成"
+    parts: list[str] = []
+    for row in targets[:3]:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label", "T")).strip()
+        price = _fmt_price(row.get("price") if row.get("price") is not None else row.get("target"))
+        reason = str(row.get("reason", "")).strip()
+        if reason:
+            parts.append(f"{label} {price}（{reason}）")
+        else:
+            parts.append(f"{label} {price}")
+    source = target_plan.get("target_source")
+    if not source:
+        source = target_plan.get("method", "unavailable")
+    if parts:
+        return f"卖出/减仓目标（{source}）：{"; ".join(parts)}"
+    return f"卖出/减仓目标（{source}）：未生成"
+
+
+def _holding_plan(session: str) -> str:
+    if session == "tail_close":
+        return "15m级别，建议持仓 0.5-1.5h（尾盘避免追高）"
+    return "15m级别，建议持仓 0.5-2h"
+
+
+def _resolve_a_stock_board(symbol: str, market_board: str | None, market: str) -> str:
+    if market_board and str(market_board).strip():
+        return str(market_board)
+    if market != "CN":
+        return {"HK": "港股", "US": "美股"}.get(market, "其他")
+
+    code = str(symbol or "").split(".")[0].strip()
+    if not code:
+        return "A股·主板"
+
+    if any(code.startswith(prefix) for prefix in ("300", "301", "30")):
+        return "A股·创业板"
+    if any(code.startswith(prefix) for prefix in ("68", "689")):
+        return "A股·科创板"
+    if code.startswith("60"):
+        return "A股·沪主板"
+    if code.startswith(("000", "001", "002", "003", "00")):
+        return "A股·深主板"
+    return "A股·深主板"
+
+
+def _board_key(board: str) -> tuple[int, str]:
+    if board.startswith("A股·"):
+        if "科创板" in board:
+            return 1, board
+        if "创业板" in board:
+            return 2, board
+        if "沪主板" in board:
+            return 3, board
+        return 0, board
+    if board == "美股":
+        return 4, board
+    if board == "港股":
+        return 5, board
+    return 5, board
+
+
+def _session_sector_summary(payload: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    tradable = payload.get("tradable_now", []) or []
+    weak_pool = payload.get("watch_only", []) or []
+    watchlist = payload.get("short_block", []) or []
+    all_items = tradable + weak_pool + watchlist
+
+    if not all_items:
+        return [], [], []
+
+    sector_scores: dict[str, float] = {}
+    for item in all_items:
+        sector = str(item.get("sector", "") or "未归类")
+        score = float(item.get("execution_score", item.get("rotation_score", 0.0) or 0.0) or 0.0)
+        sector_scores.setdefault(sector, 0.0)
+        sector_scores[sector] = max(sector_scores[sector], score)
+
+    tradable_sectors = {
+        str(item.get("sector", ""))
+        for item in tradable
+        if str(item.get("sector", "")).strip()
+    }
+    tradable_order = sorted(tradable_sectors, key=lambda s: -sector_scores.get(s, 0.0))
+    watch_sectors = {
+        str(item.get("sector", ""))
+        for item in weak_pool + watchlist
+        if str(item.get("sector", "")).strip() and str(item.get("sector", "")) not in tradable_sectors
+    }
+    watch_order = sorted(watch_sectors, key=lambda s: -sector_scores.get(s, 0.0))
+    if not tradable_order and watch_order:
+        return [], watch_order[:3], []
+    return tradable_order[:3], watch_order[:3], []
+
+
+def _board_sections(items: list[dict[str, Any]], session: str) -> list[tuple[str, list[dict[str, Any]]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        board = _resolve_a_stock_board(
+            str(item.get("symbol", "")),
+            str(item.get("market_board", "")) if item.get("market_board") else None,
+            str(item.get("market", "")),
+        )
+        groups.setdefault(board, []).append(item)
+        item["_resolved_board"] = board
+
+    keys = sorted(groups.keys(), key=lambda k: _board_key(k))
+    ordered: list[tuple[str, list[dict[str, Any]]]] = []
+    for key in keys:
+        ordered_items = sorted(groups[key], key=lambda item: float(item.get("execution_score", 0.0) or 0.0), reverse=True)
+        ordered.append((f"交易候选（交易级）｜{key}", ordered_items))
+    return ordered
 
 
 def _bucket_line(item: dict[str, Any]) -> dict[str, Any]:
@@ -1280,49 +1415,80 @@ def _layer_summary(item: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _fmt_bucket_item(item: dict[str, Any]) -> str:
+def _fmt_bucket_item(item: dict[str, Any], session: str = "morning") -> str:
     mkt = {"CN": "A股", "HK": "港股", "US": "美股"}.get(item.get("market"), item.get("market"))
     sec = _sector_cn(item.get("sector", ""))
-    board = item.get("market_board") or f"{mkt}·{sec}"
+    board = item.get("_resolved_board") or item.get("market_board") or f"{mkt}·{sec}"
     name = item.get("company_name") or item.get("symbol")
-    price = _fmt_price(item.get("current_price"))
-    ret = _fmt_pct(item.get("ret_5d"))
-    style = item.get("trade_style", "观察")
-    reason = item.get("reason", "")
-    score = item.get("execution_score")
-    score_text = f" 评分:{float(score):.0f}" if score is not None else ""
+    reason = str(item.get("reason", "")).strip()
     concept = item.get("company_concept") or sec
     ai_rel = item.get("ai_relationship") or "AI 关系待核验"
-    if item.get("trade_language_allowed"):
+    if item.get("trade_language_allowed") and item.get("push_decision") == "tradable_now":
         levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
-        target_plan = item.get("target_plan", {}) if isinstance(item.get("target_plan"), dict) else {}
-        targets = target_plan.get("targets", []) if isinstance(target_plan.get("targets"), list) else []
-        target_text = "；".join(
-            f"{row.get('label')} {_fmt_price(row.get('price'))}（{row.get('reason')}）"
-            for row in targets[:3]
-            if isinstance(row, dict)
-        )
+        target_line = _fmt_targets(item)
+        level_line = f"进场 {_fmt_price(levels.get('buy_level'))}（确认 {_fmt_price(levels.get('confirm_buy'))}）｜加仓 {_fmt_price(levels.get('add_level'))}｜止损 {_fmt_price(levels.get('stop_loss'))}"
         return "\n".join(
             [
-                f"{item.get('symbol')} {name} [{board}] {style}{score_text}",
-                f"   核验概念：{concept} | AI关系：{ai_rel}",
-                f"   买入位：{_fmt_price(levels.get('buy_level'))} 附近，回踩不破",
-                f"   确认买入：{_fmt_price(levels.get('confirm_buy'))} 上方站稳",
-                f"   加仓位：{_fmt_price(levels.get('add_level'))} 突破后不回落",
-                f"   止损位：{_fmt_price(levels.get('stop_loss'))} 跌破放弃",
-                f"   卖出/减仓目标：{target_text}",
-                f"   为什么：{reason}",
+                f"{item.get('symbol')} {name} [{board}]",
+                f"   赛道：{concept}｜AI关系：{ai_rel}",
+                f"   {level_line}",
+                f"   持仓：{_holding_plan(session)}｜{target_line}",
+                f"   触发：{reason}",
             ]
         )
-    risk_note = ""
+
+    notes = []
+    if item.get("push_decision") == "watch_only":
+        notes.append("交易级条件未完全满足，先观察")
+    elif item.get("push_decision") == "rejected":
+        notes.append("今日不做")
     if not item.get("concept_verified"):
-        risk_note = f" | 概念核验：{item.get('concept_status', '未通过')}"
-    elif not item.get("market_cap_ok", True):
-        risk_note = " | 市值未达 200 亿人民币等值"
+        notes.append(f"概念核验：{item.get('concept_status', '未通过')}")
+    if not item.get("market_cap_ok", True):
+        notes.append("市值未达 200 亿人民币等值")
+    note_text = " | ".join(notes)
+    suffix = f" | {note_text}" if note_text else ""
     return (
-        f"{item.get('symbol')} {name} [{board}] {style}{score_text} | "
-        f"现价 {price} | 5日 {ret} | 核验概念：{concept} | AI关系：{ai_rel}{risk_note} | {reason}"
+        f"{item.get('symbol')} {name} [{board}]"
+        f"\n   赛道：{concept}｜AI关系：{ai_rel}｜当前价：{_fmt_price(item.get('current_price'))}{suffix}"
+        f"\n   观察：{reason if reason else '先等待触发条件'}"
     )
+
+
+def _dedupe_state_part(prefix: str, value: str | None) -> str | None:
+    if not value:
+        return None
+    clean = value.strip()
+    if prefix == "宽度" and clean.startswith("主线"):
+        return clean.replace("主线", "宽度", 1)
+    if clean.startswith("宽度"):
+        return clean
+    if clean.startswith("主线") and prefix == "主线":
+        return clean
+    if prefix == "宽度" and clean == "主线分化":
+        return "宽度分化"
+    if prefix == "宽度" and clean.startswith("指数"):
+        return f"宽度{clean}"
+    if value.startswith(prefix):
+        return clean
+    return f"{prefix}{clean}"
+
+
+def _append_bucket_lines(lines: list[str], title: str, items: list[dict[str, Any]], max_items: int = 3, session: str = "morning") -> None:
+    lines.append("")
+    lines.append(f"▌ {title} (共{len(items)}只)")
+    if not items:
+        lines.append("无样本")
+        return
+    for idx, item in enumerate(items[:max_items], start=1):
+        rendered = _fmt_bucket_item(item, session=session)
+        if not rendered:
+            continue
+        for line_i, line in enumerate(rendered.splitlines()):
+            prefix = f"#{idx} " if line_i == 0 else "   "
+            lines.append(f"{prefix}{line}")
+    if len(items) > max_items:
+        lines.append(f"其余 {len(items)-max_items} 只见 ledger，不再展开。")
 
 
 def _hidden_playbook_line(items: list[dict[str, Any]]) -> str:
@@ -1412,293 +1578,79 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     payload = payload or build_brief_payload(date_str, session)
     if payload.get("status_only") or not payload.get("fresh_gate", {"ok": True}).get("ok", True):
         return _status_text(date_str, session, payload)
+
     meta = _session_meta(session)
-    cn_leaders = " > ".join(_sector_cn(s) for s in payload["leaders"]) if payload["leaders"] else "无"
+    leaders = " > ".join(_sector_cn(s) for s in payload["leaders"]) if payload["leaders"] else "无"
     signal = payload["cross_market_signal"]
     signal_text = signal.get("narrative", "无跨市场信号")
-    market_label = {"CN": "A股", "HK": "港股", "US": "美股"}
     staleness = _data_staleness_note()
+
     lines = [
         f"{meta['label']} · {date_str}",
         f"({meta['caption']})",
     ]
-    if session != "tail_close":
-        lines.append(f"今日领涨赛道：{cn_leaders}")
     if signal_text != "无跨市场信号":
         lines.append(f"跨市场信号：{signal_text}")
+    if leaders:
+        lines.append(f"今日活跃概念：{leaders}")
     if staleness:
         lines.append(staleness)
-    market_sections = payload.get("market_sections", {})
-    has_market_sections = bool(market_sections)
+
+    strong_sectors, weak_sectors, weak_with_edge = _session_sector_summary(payload)
+    if strong_sectors:
+        lines.append("重点看：" + " > ".join(strong_sectors))
+    if weak_sectors:
+        lines.append("弱势赛道里有强势标的：" + " > ".join(weak_sectors))
+    if weak_with_edge:
+        lines.append("边缘机会：" + " > ".join(weak_with_edge))
+
     buckets = payload.get("opportunity_buckets", {})
-    has_playbook_buckets = any(
-        key in buckets
-        for key in ("premarket_open_sell", "intraday_dip_reversal", "overheat_failure_short", "radar_watch")
-    )
-    emit_short = bool(meta.get("emit_short_block", True)) and not has_market_sections and not has_playbook_buckets
-    emit_swing = bool(meta.get("emit_swing_block", True)) and not has_market_sections and not has_playbook_buckets
-    emit_watch = bool(meta.get("emit_coverage_watch", True)) and not has_market_sections and not has_playbook_buckets
-    emit_earnings = bool(meta.get("emit_earnings", True))
+    premarket_open_sell = [item for item in buckets.get("premarket_open_sell", []) if isinstance(item, dict)]
+    intraday_dip_reversal = [item for item in buckets.get("intraday_dip_reversal", []) if isinstance(item, dict)]
+    overheat_failure_short = [item for item in buckets.get("overheat_failure_short", []) if isinstance(item, dict)]
+    radar_watch = [item for item in buckets.get("radar_watch", []) if isinstance(item, dict)]
 
-    market_state = payload.get("market_state", {})
-    if market_state:
-        lines += [
-            "",
-            "▌ 30秒决策版",
-            market_state.get("summary", "等待最新数据确认。"),
-        ]
-        if payload.get("three_locks_summary") and session != "tail_close":
-            lines.append(payload["three_locks_summary"])
-
-    review_payload = payload.get("signal_review", {})
-    if isinstance(review_payload, dict) and session != "tail_close":
-        recent_review = review_payload.get("recent")
-        if isinstance(recent_review, dict):
-            _append_review_section(lines, "近三日信号复盘｜从推送价直接算", recent_review)
-        weekly_review = review_payload.get("weekly")
-        if isinstance(weekly_review, dict):
-            _append_review_section(lines, "本周信号复盘｜周度表格口径", weekly_review)
-
-    premarket_open_sell = buckets.get("premarket_open_sell", [])
-    intraday_dip_reversal = buckets.get("intraday_dip_reversal", [])
-    overheat_failure_short = buckets.get("overheat_failure_short", [])
-    radar_watch = buckets.get("radar_watch", [])
-    if has_playbook_buckets:
-        if premarket_open_sell:
-            strength_title = "强势延续｜尾盘承接" if session == "tail_close" else "强势确认｜开盘承接"
-            lines += [
-                "",
-                f"▌ {strength_title} (共{len(premarket_open_sell)}只)",
-            ]
-            visible = premarket_open_sell[:PLAYBOOK_RENDER_LIMIT]
-            for idx, item in enumerate(visible, start=1):
-                lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-            if len(premarket_open_sell) > len(visible):
-                lines.append(_hidden_playbook_line(premarket_open_sell[len(visible):]))
-        elif session != "tail_close":
-            lines += [
-                "",
-                f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
-            ]
-            lines.append("无达标标的，不硬做。")
-
-        lines += [
-            "",
-            f"▌ 回踩确认｜下午承接 (共{len(intraday_dip_reversal)}只)",
-        ]
-        if intraday_dip_reversal:
-            visible = intraday_dip_reversal[:PLAYBOOK_RENDER_LIMIT]
-            for idx, item in enumerate(visible, start=1):
-                lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-            if len(intraday_dip_reversal) > len(visible):
-                lines.append(_hidden_playbook_line(intraday_dip_reversal[len(visible):]))
-        else:
-            lines.append("无达标标的，不硬做。")
-
+    if session == "tail_close":
+        _append_bucket_lines(
+            lines,
+            "交易候选（交易级）｜尾盘承接",
+            premarket_open_sell + intraday_dip_reversal,
+            max_items=PLAYBOOK_RENDER_LIMIT,
+            session=session,
+        )
         if overheat_failure_short:
-            lines += [
-                "",
-                f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
-            ]
-            visible = overheat_failure_short[:PLAYBOOK_RENDER_LIMIT]
-            for idx, item in enumerate(visible, start=1):
-                lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-            if len(overheat_failure_short) > len(visible):
-                lines.append(_hidden_playbook_line(overheat_failure_short[len(visible):]))
-        elif session != "tail_close":
-            lines += [
-                "",
-                f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
-            ]
-            lines.append("无达标标的，不硬做。")
-
+            _append_bucket_lines(lines, "风险观察（先避开）", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
         if radar_watch:
-            lines += [
-                "",
-                f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
+            _append_bucket_lines(lines, "观察雷达", radar_watch, max_items=DANGER_RENDER_LIMIT, session=session)
+    else:
+        candidates = premarket_open_sell + intraday_dip_reversal
+        board_sections = _board_sections(candidates, session)
+        if board_sections:
+            for key, group_items in board_sections:
+                _append_bucket_lines(lines, key, group_items, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
+        else:
+            _append_bucket_lines(lines, "交易候选（交易级）", candidates, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
+        if radar_watch:
+            _append_bucket_lines(lines, "观察雷达", radar_watch, max_items=DANGER_RENDER_LIMIT, session=session)
+        if overheat_failure_short:
+            _append_bucket_lines(lines, "风险观察（先避开）", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
+
+    if not premarket_open_sell and not intraday_dip_reversal and not overheat_failure_short:
+        tradable_now = [item for item in payload.get("tradable_now", []) if item.get("trade_language_allowed")]
+        if tradable_now:
+            _append_bucket_lines(lines, "交易级补充", tradable_now, max_items=PLAYBOOK_RENDER_LIMIT)
+        elif payload.get("short_block"):
+            watchlist = [
+                item
+                for item in payload.get("short_block", [])
+                if item.get("push_decision") == "watch_only"
             ]
-            visible = radar_watch[:PLAYBOOK_RENDER_LIMIT]
-            for idx, item in enumerate(visible, start=1):
-                lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-            if len(radar_watch) > len(visible):
-                lines.append(_hidden_playbook_line(radar_watch[len(visible):]))
-        elif session != "tail_close":
-            lines += [
-                "",
-                f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
-            ]
-            lines.append("无达标观察项。")
+            if not watchlist:
+                watchlist = payload.get("short_block", [])
+            if watchlist:
+                _append_bucket_lines(lines, "盯盘候选", watchlist[:PLAYBOOK_RENDER_LIMIT], max_items=PLAYBOOK_RENDER_LIMIT)
 
-    if market_sections:
-        for market in MARKET_SECTION_ORDER:
-            section = market_sections.get(market, {})
-            items = section.get("items", []) if isinstance(section, dict) else []
-            if not items:
-                continue
-            lines += [
-                "",
-                f"▌ {section.get('label', MARKET_SECTION_LABELS.get(market, market))}",
-            ]
-            for idx, item in enumerate(items, start=1):
-                sec = _sector_cn(item.get("sector", ""))
-                decision = _decision_label(item)
-                lock_label = _three_locks_label(item)
-                lines.append(
-                    f"#{idx} {item['symbol']} {item.get('company_name', item['symbol'])} "
-                    f"[{decision}] {lock_label} · {sec}"
-                )
-                lines.append(
-                    f"   现价 {_fmt_price(item.get('current_price'))} | 5日 {_fmt_pct(item.get('ret_5d'))} | "
-                    f"ATR {_fmt_pct(item.get('atr_pct'))} | 评分 {float(item.get('execution_score', 0.0) or 0.0):.0f}"
-                )
-                lines.append(f"   {_technical_line(item)}")
-                lines.append(f"   {_action_line(item)}")
-
-    daytrade_focus = buckets.get("daytrade_focus", [])
-    if daytrade_focus and not has_market_sections and not has_playbook_buckets:
-        lines += [
-            "",
-            f"▌ 机会池｜日内优先 (共{len(daytrade_focus)}只)",
-        ]
-        for idx, item in enumerate(daytrade_focus, start=1):
-            lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-
-    overnight_watch = buckets.get("overnight_watch", [])
-    if overnight_watch and not has_market_sections and not has_playbook_buckets:
-        lines += [
-            "",
-            f"▌ 机会池｜隔夜观察 (共{len(overnight_watch)}只)",
-        ]
-        for idx, item in enumerate(overnight_watch, start=1):
-            lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-
-    danger_pool = payload.get("danger_pool", [])
-    if danger_pool and session != "tail_close":
-        visible_danger = danger_pool[:DANGER_RENDER_LIMIT]
-        hidden_count = len(danger_pool) - len(visible_danger)
-        lines += [
-            "",
-            f"▌ 禁区池｜只展示前{len(visible_danger)}个风险样本 (共{len(danger_pool)}只)",
-        ]
-        for idx, item in enumerate(visible_danger, start=1):
-            lines.append(f"#{idx} {_fmt_bucket_item(item)}")
-        if hidden_count > 0:
-            lines.append(f"其余 {hidden_count} 只已进内部记录，Discord 不展开。")
-
-    mapping_chain = payload.get("mapping_chain", [])
-    if mapping_chain:
-        lines += [
-            "",
-            "▌ 关键映射链",
-        ]
-        for idx, row in enumerate(mapping_chain, start=1):
-            corr = float(row.get("correlation", 0.0) or 0.0)
-            lag = row.get("lag")
-            lag_text = f"lag {lag}" if lag is not None else "lag 未知"
-            verify = "已验证" if row.get("verified_event") else "待验证"
-            lines.append(
-                f"#{idx} {row.get('driver','海外主线')} → {row.get('mapped_asset','映射资产')} | corr {corr:+.3f} | {lag_text} | {verify}"
-            )
-            if row.get("note"):
-                lines.append(f"   说明：{row['note']}")
-
-    open_script = payload.get("open_script", [])
-    if open_script:
-        lines += [
-            "",
-            "▌ 尾盘执行" if session == "tail_close" else "▌ 开盘脚本",
-        ]
-        for idx, step in enumerate(open_script, start=1):
-            lines.append(f"{idx}. {step}")
-
-    offset = 1
-    watchlist_mode = meta.get("brief_mode") == "watchlist"
-    if emit_short:
-        lines += [
-            "",
-            f"▌ {'今日优先盯盘 ticker' if watchlist_mode else '短线 1-2天'} (共{len(payload['short_block'])}只)",
-        ]
-        if watchlist_mode:
-            lines.append("说明：这是开盘前盯盘清单，不是自动行动指令；盘中只看你自己确认的突破/回踩。")
-        for idx, item in enumerate(payload["short_block"], start=1):
-            mkt = market_label.get(item["market"], item["market"])
-            sec = _sector_cn(item["sector"])
-            decision = "优先" if item.get("push_decision") == "tradable_now" else "观察"
-            lines.append(f"#{idx} {item['symbol']} {item['company_name']} [{decision}] {mkt}·{sec}")
-            if watchlist_mode:
-                lines.append(
-                    f"   现价 {item['current_price']:.2f} | 5日 {item.get('ret_5d', 0.0):+.1%} | "
-                    f"ATR {item.get('atr_pct', 0.0):.1%} | pool={item.get('pool','watch')}"
-                )
-                lines.append(
-                    f"   盯盘：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}"
-                )
-                lines.append(f"   加权：{_layer_summary(item)}")
-            elif item.get("trade_language_allowed"):
-                p = item["plan"]
-                lines.append(
-                    f"   现价 {item['current_price']:.2f} | 买入 {p['entry_low']:.2f}-{p['entry_high']:.2f} | "
-                    f"T1 {p['target_1']:.2f} T2 {p['target_2']:.2f} | SL {p['stop_loss']:.2f} | RR 1:{p['rr']:.2f}"
-                )
-                lines.append(f"   触发：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
-            else:
-                lines.append(
-                    f"   现价 {item['current_price']:.2f} | 5日 {item.get('ret_5d', 0.0):+.1%} | "
-                    f"ATR {item.get('atr_pct', 0.0):.1%}"
-                )
-                lines.append(f"   观察：{item.get('thesis') or sec + ' 强势 + ' + mkt + ' 动量延续'}")
-        offset += len(payload["short_block"])
-    if emit_swing:
-        lines.append("")
-        lines.append(f"▌ 中长线 1-3月 (共{len(payload['swing_block'])}只)")
-        for idx, item in enumerate(payload["swing_block"], start=offset):
-            p = item["plan"]
-            mkt = market_label.get(item["market"], item["market"])
-            sec = _sector_cn(item["sector"])
-            lines.append(f"#{idx} {item['symbol']} {item['company_name']} [LONG] {mkt}·{sec}")
-            lines.append(
-                f"   现价 {item['current_price']:.2f} | 分批观察 "
-                f"{p['entry_tranches'][0]:.2f}/{p['entry_tranches'][1]:.2f}/{p['entry_tranches'][2]:.2f} | "
-                f"SL {p['stop_loss']:.2f} | T1 {p['target_1']:.2f} T2 {p['target_2']:.2f}"
-            )
-            lines.append(f"   逻辑：{item.get('thesis') or sec + '中线布局机会'}")
-        offset += len(payload["swing_block"])
-    if emit_watch and payload.get("coverage_watch"):
-        lines.append("")
-        lines.append(f"▌ 市场覆盖观察名单 (共{len(payload['coverage_watch'])}只)")
-        for idx, item in enumerate(
-            payload["coverage_watch"],
-            start=offset,
-        ):
-            mkt = market_label.get(item["market"], item["market"])
-            sec = _sector_cn(item["sector"])
-            lines.append(f"#{idx} {item['symbol']} {item['company_name']} [{mkt}·{sec}]")
-            lines.append(
-                f"   现价 {item['current_price']:.2f} | pool={item.get('pool','watch')} | "
-                f"5日 {item.get('ret_5d', 0.0):+.1%} | ATR {item.get('atr_pct', 0.0):.1%}"
-            )
-            lines.append(
-                f"   观察：{item.get('thesis') or sec + ' 值得跟踪'}，"
-                "因市场覆盖需要单列展示，当前不归类为短线 1-2 天推荐。"
-            )
-        offset += len(payload["coverage_watch"])
-
-    # ── 赌财报板块 ─────────────────────────────────────────────────────────────
-    earnings_plays = _load_earnings_plays(date_str, top_n=3)
-    if emit_earnings and earnings_plays:
-        lines.append("")
-        # Header: if any play is reporting today (0天后), say "本周发布", else "下周发布"
-        _min_days = min((p.get("days_to_earnings", 99) for p in earnings_plays), default=99)
-        _earn_window = "今日/本周" if _min_days <= 2 else "下周"
-        _limited_note = " ⚠️限量数据" if earnings_plays[0].get("data_limited") else ""
-        earnings_title = "▌ 🎯 赌财报"
-        if earnings_plays[0].get("data_limited"):
-            earnings_title = "▌ 📅 财报日历观察"
-        lines.append(f"{earnings_title} — {_earn_window}发布 (共{len(earnings_plays)}只){_limited_note}")
-        for idx, play in enumerate(earnings_plays, start=offset):
-            lines.extend(_fmt_earnings_block(play, idx, market_label))
     return "\n".join(lines)
-
 
 def _send_chunk(token: str, channel_id: str, text: str) -> None:
     """POST one message chunk to Discord using requests (handles SSL EOF on Python 3.14+)."""
@@ -1758,14 +1710,21 @@ def maybe_send(text: str) -> None:
             raise
 
 
+def _should_send_to_discord(payload: dict[str, Any]) -> bool:
+    if payload.get("send_status") == "status_only" or payload.get("status_only"):
+        return os.environ.get("AI_ROTATOR_SEND_STATUS_ALERTS", "").strip() == "1"
+    return True
+
+
 def _input_artifact_hash(date_str: str) -> str:
     digest = hashlib.sha256()
     candidates = PROJECT_ROOT / "data" / "candidates.json"
     us_report = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-us-rotation.json"
     ah_report = PROJECT_ROOT / "reports" / "daily" / f"{date_str}-ah-rotation.json"
     earnings = PROJECT_ROOT / "data" / "earnings_plays.json"
+    fetch_status = PROJECT_ROOT / "data" / "fetch_status.json"
     session_rules = PROJECT_ROOT / "config" / "session_rules.yaml"
-    for path in (candidates, us_report, ah_report, earnings, session_rules):
+    for path in (candidates, us_report, ah_report, earnings, fetch_status, session_rules):
         if path.exists():
             digest.update(path.name.encode())
             digest.update(path.read_bytes())
@@ -1835,7 +1794,10 @@ def main() -> None:
         print("[INFO] session configured as no-send warmup; skipping Discord push")
         print(text)
         return
-    maybe_send(text)
+    if _should_send_to_discord(payload):
+        maybe_send(text)
+    else:
+        print("[INFO] status-only payload; skipping Discord push")
     if not payload.get("status_only"):
         _persist_decision_ledger(payload)
         _persist_signal_ledger(payload)

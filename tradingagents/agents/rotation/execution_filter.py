@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time as dtime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,17 @@ from tradingagents.runtime.paths import PROJECT_ROOT, RAW_DATA_DIR
 
 
 _CST = timezone(timedelta(hours=8))
+_SESSION_INTRADAY_CUTOFF = {
+    "midday": dtime(11, 0),
+    "tail_close": dtime(14, 0),
+}
+
+
+def _is_fresh_for_session(ts: pd.Timestamp, session: str) -> bool:
+    cutoff = _SESSION_INTRADAY_CUTOFF.get(session)
+    if cutoff is None:
+        return True
+    return (ts.hour, ts.minute, ts.second) >= (cutoff.hour, cutoff.minute, cutoff.second)
 
 
 def _today_cst() -> str:
@@ -74,13 +85,31 @@ def build_freshness_record(market: str, symbol: str, session: str, trade_date: s
                 intraday_status="stale",
                 source_path=source_path,
             )
-        latest = str(today_bars.iloc[-1]["datetime"])
+        latest_ts = pd.to_datetime(today_bars.iloc[-1]["datetime"], errors="coerce")
+        if latest_ts is None or pd.isna(latest_ts):
+            return FreshnessRecord(
+                symbol=symbol,
+                market=market,
+                session=session,
+                intraday_status="failed",
+                source_path=source_path,
+            )
+        if not _is_fresh_for_session(latest_ts, session):
+            return FreshnessRecord(
+                symbol=symbol,
+                market=market,
+                session=session,
+                intraday_status="stale",
+                as_of=str(latest_ts),
+                bars_today=len(today_bars),
+                source_path=source_path,
+            )
         return FreshnessRecord(
             symbol=symbol,
             market=market,
             session=session,
             intraday_status="fresh",
-            as_of=latest,
+            as_of=str(latest_ts),
             bars_today=len(today_bars),
             source_path=source_path,
         )

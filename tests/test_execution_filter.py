@@ -3,6 +3,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import json
 import sys
+import pandas as pd
+from tradingagents.agents.rotation.common import normalize_symbol_for_file
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -181,6 +183,32 @@ def test_confirmed_three_locks_adds_weight_but_does_not_override_scope():
     assert decision["push_decision"] == "rejected"
     assert "market_out_of_scope" in decision["reason_codes"]
     assert decision["execution_score"] < candidate["_session_score"]
+
+
+def test_midday_intraday_bar_time_cutoff_marks_stale(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    monkeypatch.setattr("tradingagents.agents.rotation.execution_filter.RAW_DATA_DIR", raw_dir)
+    symbol = "688256.SH"
+    file_key = normalize_symbol_for_file("CN", symbol)
+    early = pd.DataFrame(
+        [
+            {"datetime": "2026-06-18 09:30:00", "open": 12.0, "high": 12.2, "low": 11.8, "close": 11.9, "volume": 1000},
+        ]
+    )
+    early.to_csv(raw_dir / f"CN_{file_key}_1h.csv", index=False)
+    record = build_freshness_record("CN", symbol, "midday", "2026-06-18")
+    assert record.intraday_status == "stale"
+
+    late = pd.DataFrame(
+        [
+            {"datetime": "2026-06-18 10:30:00", "open": 12.0, "high": 12.2, "low": 11.8, "close": 11.9, "volume": 1000},
+            {"datetime": "2026-06-18 14:05:00", "open": 12.0, "high": 12.8, "low": 11.8, "close": 12.4, "volume": 1200},
+        ]
+    )
+    late.to_csv(raw_dir / f"CN_{file_key}_1h.csv", index=False)
+    record = build_freshness_record("CN", symbol, "midday", "2026-06-18")
+    assert record.intraday_status == "fresh"
 
 
 def test_low_market_cap_rejected_even_when_other_gates_are_good():

@@ -99,6 +99,9 @@ class PushPayload(BaseModel):
     mapping_chain: list[dict[str, Any]] = Field(default_factory=list)
     open_script: list[str] = Field(default_factory=list)
     freshness_manifest: list[dict[str, Any]]
+    fresh_gate: dict[str, Any]
+    status_only: bool = False
+    send_status: Literal["ready", "status_only"] = "ready"
     contract_version: str = CONTRACT_VERSION
 
 

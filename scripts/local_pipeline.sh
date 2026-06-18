@@ -95,7 +95,7 @@ case "$SESSION" in
     # Morning session now sends a lightweight pre-open overview after the
     # upstream refresh/build steps succeed, so the day starts with a real brief.
     # fetch_all_daily and screen_candidates are critical: abort on failure.
-    run_critical_step "Fetch daily OHLCV (all 3357 stocks)"  "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_critical_step "Fetch daily OHLCV (all 3357 stocks)"  "cd $SCRIPTS && python3 fetch_all_daily.py --session morning"
     run_critical_step "Score and screen candidates"           "cd $SCRIPTS && python3 screen_candidates.py"
     run_step "Screen earnings plays (next 7 days)"            "cd $SCRIPTS && python3 fetch_earnings_plays.py"
     # Intraday bars: best-effort (yfinance/akshare may be blocked in CN).
@@ -110,7 +110,7 @@ case "$SESSION" in
   midday)
     # Midday now requires a fresh market snapshot before any trading signal.
     # This is the hard freshness gate. Intraday overlay remains best-effort only.
-    run_critical_step "Fetch daily OHLCV (midday refresh)"    "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_critical_step "Fetch daily OHLCV (midday refresh)"    "cd $SCRIPTS && python3 fetch_all_daily.py --session midday"
     run_critical_step "Re-score candidates (fresh cache)"     "cd $SCRIPTS && python3 screen_candidates.py"
     run_step "Fetch 1h intraday bars (midday refresh)"       "cd $SCRIPTS && python3 fetch_intraday.py --session midday"
     run_critical_step "Build US rotation report"             "cd $SCRIPTS && python3 run_daily_rotation.py --market US"
@@ -121,7 +121,7 @@ case "$SESSION" in
   tail_close)
     # Tail-close confirmation: refresh the same deterministic inputs, require
     # fresh intraday data in session_rules, then send only gated trade cards.
-    run_critical_step "Fetch daily OHLCV (tail refresh)"      "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_critical_step "Fetch daily OHLCV (tail refresh)"      "cd $SCRIPTS && python3 fetch_all_daily.py --session tail_close"
     run_critical_step "Re-score candidates (tail cache)"      "cd $SCRIPTS && python3 screen_candidates.py"
     run_step "Fetch 1h intraday bars (tail refresh)"          "cd $SCRIPTS && python3 fetch_intraday.py --session tail_close"
     run_critical_step "Build US rotation report"              "cd $SCRIPTS && python3 run_daily_rotation.py --market US"
@@ -133,7 +133,7 @@ case "$SESSION" in
     # US prep watchlist window. Internal session name stays 'evening'
     # but the product meaning is shortline-genie watchlist, not an auto-buy signal.
     # Fresh market snapshot is the hard gate; intraday overlay is best-effort.
-    run_critical_step "Fetch daily OHLCV (premarket refresh)"     "cd $SCRIPTS && python3 fetch_all_daily.py"
+    run_critical_step "Fetch daily OHLCV (premarket refresh)"     "cd $SCRIPTS && python3 fetch_all_daily.py --session evening"
     run_critical_step "Score and screen candidates"                "cd $SCRIPTS && python3 screen_candidates.py"
     # Intraday bars for US evening scoring.
     run_step "Fetch 1h intraday bars (evening refresh)"      "cd $SCRIPTS && python3 fetch_intraday.py --session evening"
