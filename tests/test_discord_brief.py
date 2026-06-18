@@ -178,8 +178,8 @@ def _build_payload_with_fixtures(date_str: str, session: str = "morning") -> dic
 def test_brief_contains_required_sections():
     text = _build_text_with_fixtures("2026-05-05")
     assert "盘前早报" in text
-    assert "强势赛道" in text
-    assert "弱势赛道有强票" in text
+    assert "今天优先交易强势赛道" in text
+    assert "弱势/分化赛道里的强标的" in text
 
 
 def test_brief_has_date_header():
@@ -402,7 +402,7 @@ def test_build_brief_text_sessions_have_different_headers():
     assert "盘前早报" in m
     assert "午间交易计划" in d
     assert "AI赛道短线精灵" in e
-    assert "观察池" in e
+    assert "等待触发" in e
 
 
 def test_midday_excludes_us_stocks():
@@ -471,7 +471,7 @@ def test_evening_watchlist_fills_from_candidate_set_to_five():
 
 def test_evening_watchlist_text_uses_layers_not_entry_command():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "观察池" in text
+    assert "等待触发" in text
     assert "回到" in text
     assert "仍有承接" in text
     assert "买入 " not in text
@@ -492,7 +492,7 @@ def test_evening_omits_bottleneck_from_payload_and_text():
 
 def test_evening_renders_decision_sections_and_preserves_watchlist():
     text = _build_text_with_fixtures("2026-05-05", "evening")
-    assert "观察池" in text
+    assert "等待触发" in text
     assert "关键映射链" not in text
     assert "开盘脚本" not in text
     assert "日线结构：" not in text
@@ -565,7 +565,7 @@ def test_brief_renders_market_coverage_watchlist():
 
 def test_morning_now_renders_short_and_swing_blocks():
     text = _build_text_with_fixtures("2026-05-05", "morning")
-    assert "观察池" in text
+    assert "等待触发" in text
     assert "短线 1-2天" not in text
 
 
@@ -887,6 +887,65 @@ def test_tail_close_omits_non_trader_context():
     assert "禁区池" not in text
     assert "001287.SZ" in text
     assert "02028.HK" not in text
+
+
+def test_brief_renders_up_to_ten_trade_plan_names():
+    base = {
+        "market": "CN",
+        "company_name": "测试股份",
+        "sector": "AI芯片",
+        "trade_style": "强势确认",
+        "current_price": 10.0,
+        "ret_5d": 0.1,
+        "execution_score": 80.0,
+        "push_decision": "tradable_now",
+        "reason": "强势板块里的强标的",
+        "market_board": "A股·深主板",
+        "company_concept": "AI芯片",
+        "ai_relationship": "核心/直接 AI",
+        "concept_verified": True,
+        "market_cap_ok": True,
+        "trade_language_allowed": True,
+        "trade_levels": {
+            "buy_level": 10.0,
+            "confirm_buy": 10.2,
+            "add_level": 10.4,
+            "stop_loss": 9.8,
+        },
+        "target_plan": {
+            "target_source": "fib_extension",
+            "targets": [
+                {"label": "T1", "price": 10.8, "reason": "Fib 1.272"},
+                {"label": "T2", "price": 11.2, "reason": "Fib 1.618"},
+            ],
+        },
+    }
+    items = [{**base, "symbol": f"00000{i}.SZ", "company_name": f"测试{i}"} for i in range(11)]
+    payload = {
+        "date": "2026-05-05",
+        "session": "midday",
+        "leaders": ["AI芯片"],
+        "fresh_gate": {"ok": True},
+        "status_only": False,
+        "opportunity_buckets": {
+            "premarket_open_sell": items,
+            "intraday_dip_reversal": [],
+            "overheat_failure_short": [],
+        },
+        "short_block": [],
+        "swing_block": [],
+        "coverage_watch": [],
+    }
+
+    text = build_brief_text("2026-05-05", "midday", payload=payload)
+
+    assert "今日交易计划｜A股·深主板 (共11只)" in text
+    assert "#10 000009.SZ 测试9" in text
+    assert "0000010.SZ" not in text
+    assert "另 1 只见内部记录。" in text
+    assert "买入 10.00｜确认 10.20｜加仓 10.40｜止损 9.80" in text
+    assert "卖出/减仓：T1 10.80（Fib 1.272）；T2 11.20（Fib 1.618）｜算法 fib_extension" in text
+    assert "周期：15m级别，预计 0.5-2h；目标/止损先到先处理" in text
 
 
 def test_data_limited_earnings_title_changes():

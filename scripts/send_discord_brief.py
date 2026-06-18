@@ -154,7 +154,7 @@ def _sector_cn(code: str) -> str:
 
 DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
-PLAYBOOK_RENDER_LIMIT = 2
+PLAYBOOK_RENDER_LIMIT = 10
 DANGER_RENDER_LIMIT = 1
 THREE_LOCK_LABELS = {
     "triple_lock": "日线强确认",
@@ -514,9 +514,13 @@ def _fmt_targets(item: dict[str, Any]) -> str:
 
 
 def _holding_plan(session: str) -> str:
+    if session in {"morning", "ah_open"}:
+        return "开盘后 15m 触发，预计 0.5-2h；未触发不做"
+    if session in {"midday", "us_rth_confirm"}:
+        return "15m级别，预计 0.5-2h；目标/止损先到先处理"
     if session == "tail_close":
-        return "15m级别，建议持仓 0.5-1.5h（尾盘避免追高）"
-    return "15m级别，建议持仓 0.5-2h"
+        return "15m级别，预计 0.5-1.5h；尾盘不恋战"
+    return "15m级别，预计 0.5-2h"
 
 
 def _resolve_a_stock_board(symbol: str, market_board: str | None, market: str) -> str:
@@ -605,7 +609,7 @@ def _board_sections(items: list[dict[str, Any]], session: str) -> list[tuple[str
     ordered: list[tuple[str, list[dict[str, Any]]]] = []
     for key in keys:
         ordered_items = sorted(groups[key], key=lambda item: float(item.get("execution_score", 0.0) or 0.0), reverse=True)
-        title = "今日可做" if any(item.get("trade_language_allowed") for item in ordered_items) else "观察池"
+        title = "今日交易计划" if any(item.get("trade_language_allowed") for item in ordered_items) else "等待触发"
         ordered.append((f"{title}｜{key}", ordered_items))
     return ordered
 
@@ -770,7 +774,7 @@ def _playbook_line(item: dict[str, Any], playbook: str) -> dict[str, Any]:
     support = _support_level(item)
     if playbook == "premarket_open_sell":
         line["trade_style"] = "强势确认"
-        line["reason"] = "盘前/开盘承接强，适合继续盯强弱延续；不延续就降级观察"
+        line["reason"] = "强势板块里的强标的，开盘后 15m 继续承接才执行；不延续就放弃"
     elif playbook == "intraday_dip_reversal":
         line["trade_style"] = "回踩确认"
         if not item.get("active_sector") and _is_ai_rotation_family(item):
@@ -782,9 +786,9 @@ def _playbook_line(item: dict[str, Any], playbook: str) -> dict[str, Any]:
             )
         else:
             line["reason"] = (
-                f"盘中回到 {_fmt_price(support)} 附近仍有承接，才升级处理"
+                f"弱势/分化板块里的强标的，盘中回到 {_fmt_price(support)} 附近仍有承接才执行"
                 if support is not None
-                else "只等盘中回落承接确认，直线拉升不追"
+                else "弱势/分化板块里的强标的，只等盘中回落承接确认"
             )
     elif playbook == "overheat_failure_short":
         line["trade_style"] = "过热转弱"
@@ -1502,9 +1506,9 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
         lines.append(staleness)
 
     strong_sectors, watch_sectors = _session_sector_summary(payload)
-    lines.append("强势赛道：" + (" > ".join(strong_sectors) if strong_sectors else "暂无交易级确认"))
+    lines.append("今天优先交易强势赛道：" + (" > ".join(strong_sectors) if strong_sectors else "暂无交易级确认"))
     if watch_sectors:
-        lines.append("弱势赛道有强票：" + " > ".join(watch_sectors))
+        lines.append("弱势/分化赛道里的强标的：" + " > ".join(watch_sectors))
     elif leaders:
         lines.append(f"重点观察：{leaders}")
 
@@ -1518,7 +1522,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
         for key, group_items in board_sections:
             _append_bucket_lines(lines, key, group_items, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
     else:
-        _append_bucket_lines(lines, "今日可做", candidates, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
+        _append_bucket_lines(lines, "今日交易计划", candidates, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
     if overheat_failure_short:
         _append_bucket_lines(lines, "风险观察", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
 
