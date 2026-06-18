@@ -44,12 +44,13 @@ SESSION_MARKETS = {
 }
 
 # Morning intraday bars are just cache warm-up because intraday_weight=0.
-# Midday/evening need fresh overlay, but still only for the top slice that can
-# realistically affect the brief.
+# Sessions with require_fresh_intraday must fetch the full focused candidate
+# set; otherwise the fresh gate can never pass after screening produces more
+# candidates than this fetcher covers.
 SESSION_MAX_SYMBOLS = {
     "morning": 45,
-    "midday": 40,
-    "tail_close": 40,
+    "midday": None,
+    "tail_close": None,
     "evening": 5,
 }
 
