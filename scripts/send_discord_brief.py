@@ -1668,8 +1668,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default=_today_cst())
     parser.add_argument("--session", default="morning",
-                        choices=["morning", "ah_open", "midday", "tail_close", "evening"],
-                        help="Which daily session to push (morning/ah_open/midday/tail_close/evening)")
+                        choices=["morning", "ah_open", "midday", "tail_close", "evening", "us_rth_confirm"],
+                        help="Which daily session to push")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     payload = build_brief_payload(args.date, args.session)

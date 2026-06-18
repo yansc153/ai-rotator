@@ -48,6 +48,7 @@ SESSION_MARKETS = {
     "midday": {"CN", "HK", "US"},
     "tail_close": {"CN", "HK"},
     "evening": {"US"},
+    "us_rth_confirm": {"US"},
 }
 
 # Morning intraday bars are just cache warm-up because intraday_weight=0.
@@ -59,6 +60,7 @@ SESSION_MAX_SYMBOLS = {
     "midday": None,
     "tail_close": None,
     "evening": 5,
+    "us_rth_confirm": None,
 }
 
 
@@ -312,7 +314,7 @@ def main() -> None:
     _prefer_ipv4_for_requests()
     load_env_file()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--session", choices=["morning", "midday", "tail_close", "evening"])
+    parser.add_argument("--session", choices=["morning", "midday", "tail_close", "evening", "us_rth_confirm"])
     parser.add_argument("--max-symbols", type=int, default=None)
     args = parser.parse_args()
 
@@ -332,7 +334,7 @@ def main() -> None:
                 ok += 1
             else:
                 fail += 1
-                if args.session in {"midday", "tail_close"} and ok == 0 and fail >= _FRESH_SESSION_FAIL_FAST_AFTER:
+                if args.session in {"midday", "tail_close", "us_rth_confirm"} and ok == 0 and fail >= _FRESH_SESSION_FAIL_FAST_AFTER:
                     print(
                         "\n[ERROR] intraday source unavailable: "
                         f"{fail} consecutive symbols failed; fresh session cannot continue",
@@ -342,7 +344,7 @@ def main() -> None:
         except Exception as exc:
             print(f"  {market} {symbol}: ERROR — {exc}", flush=True)
             fail += 1
-            if args.session in {"midday", "tail_close"} and ok == 0 and fail >= _FRESH_SESSION_FAIL_FAST_AFTER:
+            if args.session in {"midday", "tail_close", "us_rth_confirm"} and ok == 0 and fail >= _FRESH_SESSION_FAIL_FAST_AFTER:
                 print(
                     "\n[ERROR] intraday source unavailable: "
                     f"{fail} consecutive symbols failed; fresh session cannot continue",

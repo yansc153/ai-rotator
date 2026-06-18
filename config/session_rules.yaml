@@ -132,3 +132,28 @@ sessions:
       CN: 200
       HK: 217.4
       US: 2.8
+
+  us_rth_confirm:
+    label: "🇺🇸 美股盘中确认"
+    caption: "美股盘中 15m 确认 + 点位计划"
+    focus_markets: ["US"]
+    send_to_discord: true
+    include_candidate_set: true
+    strict_send_requires_tradable: false
+    emit_short_block: true
+    emit_swing_block: false
+    emit_bottleneck_block: false
+    bottleneck_block_size: 0
+    emit_coverage_watch: true
+    emit_earnings: false
+    intraday_weight: 0.7
+    overbought_5d: 0.30
+    overextended_intraday: 0.05
+    require_fresh_intraday: true
+    require_active_sector_for_short: true
+    structure_only_min_score: 45.0
+    structure_only_max_rank: 3
+    min_market_cap:
+      CN: 200
+      HK: 217.4
+      US: 2.8

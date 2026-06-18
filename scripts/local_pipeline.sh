@@ -7,6 +7,7 @@
 #   ./scripts/local_pipeline.sh midday     # 12:30 — re-screen + 盘中播报
 #   ./scripts/local_pipeline.sh tail_close # 14:30 — 尾盘确认
 #   ./scripts/local_pipeline.sh evening    # 20:30 — US prep watchlist + Discord push
+#   ./scripts/local_pipeline.sh us_rth_confirm # US RTH — 15m trade cards
 #
 # This script is the local/runtime entrypoint for scheduled sessions.
 # LLM enrichment is optional; deterministic scan + Discord push can run without it.
@@ -142,6 +143,14 @@ case "$SESSION" in
     run_critical_step "Send AI短线精灵盯盘清单 to Discord"   "cd $SCRIPTS && python3 send_discord_brief.py --session evening"
     ;;
 
+  us_rth_confirm)
+    run_critical_step "Fetch daily OHLCV (US RTH refresh)"    "cd $SCRIPTS && python3 fetch_all_daily.py --session evening"
+    run_critical_step "Screen candidates"                     "cd $SCRIPTS && python3 screen_candidates.py"
+    run_step "Fetch 15m intraday bars (US RTH refresh)"       "cd $SCRIPTS && python3 fetch_intraday.py --session us_rth_confirm"
+    run_critical_step "Build US rotation report"              "cd $SCRIPTS && python3 run_daily_rotation.py --market US"
+    run_critical_step "Send 美股盘中确认 to Discord"          "cd $SCRIPTS && python3 send_discord_brief.py --session us_rth_confirm"
+    ;;
+
   ah_open)
     # A/HK opening watchlist — fires at 08:45 CST, before A-share open (09:30).
     # Re-uses the morning's already-fetched OHLCV cache (no new fetch needed).
@@ -153,7 +162,7 @@ case "$SESSION" in
     ;;
 
   *)
-    echo "[ERROR] Unknown session: $SESSION  (use: morning | ah_open | midday | tail_close | evening)"
+    echo "[ERROR] Unknown session: $SESSION  (use: morning | ah_open | midday | tail_close | evening | us_rth_confirm)"
     exit 1
     ;;
 esac

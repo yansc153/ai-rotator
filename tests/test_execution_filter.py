@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from tradingagents.agents.rotation.execution_filter import (
     build_freshness_record,
     classify_candidate,
+    session_meta,
 )
 import tradingagents.agents.rotation.execution_filter as execution_filter
 
@@ -54,6 +55,13 @@ def test_us_freshness_record_uses_15m_file(tmp_path, monkeypatch):
 
     assert record.intraday_status == "fresh"
     assert record.source_path.endswith("US_NVDA_15m.csv")
+
+
+def test_us_rth_confirm_requires_fresh_intraday():
+    meta = session_meta("us_rth_confirm")
+
+    assert meta["focus_markets"] == {"US"}
+    assert meta["require_fresh_intraday"] is True
 
 
 def test_midday_missing_intraday_downgrades_to_watch_only():
