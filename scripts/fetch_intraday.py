@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import socket
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -73,6 +74,14 @@ def _run_with_timeout(timeout_s: int, func, **kwargs):
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old_handler)
+
+
+def _prefer_ipv4_for_requests() -> None:
+    try:
+        import urllib3.util.connection as urllib3_connection
+    except Exception:
+        return
+    urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 
 def _can_fetch_us_intraday() -> bool:
@@ -234,6 +243,7 @@ def _load_symbols(session: str | None = None, max_symbols: int | None = None) ->
 
 
 def main() -> None:
+    _prefer_ipv4_for_requests()
     load_env_file()
     parser = argparse.ArgumentParser()
     parser.add_argument("--session", choices=["morning", "midday", "tail_close", "evening"])

@@ -98,6 +98,18 @@ def test_tail_close_fails_fast_when_intraday_source_is_down(monkeypatch, capsys)
     assert "intraday source unavailable" in capsys.readouterr().out
 
 
+def test_main_prefers_ipv4_before_fetching(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(intraday, "_prefer_ipv4_for_requests", lambda: calls.append("ipv4"))
+    monkeypatch.setattr(intraday, "_load_symbols", lambda session, max_symbols: [])
+    monkeypatch.setattr(sys, "argv", ["fetch_intraday.py", "--session", "tail_close"])
+
+    intraday.main()
+
+    assert calls == ["ipv4"]
+
+
 def test_fetch_cn_intraday_writes_15m_file(monkeypatch, tmp_path):
     import pandas as pd
     import akshare as ak
