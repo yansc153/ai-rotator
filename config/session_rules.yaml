@@ -4,7 +4,10 @@ sessions:
     caption: "美股昨收 + A/HK开盘布局"
     focus_markets: ["CN", "HK", "US"]
     send_to_discord: true
+    trade_plan_mode: "map_only"
     include_candidate_set: true
+    short_block_size: 10
+    coverage_watch_size: 0
     emit_short_block: true
     emit_swing_block: true
     emit_bottleneck_block: false
@@ -27,7 +30,10 @@ sessions:
     caption: "午间休市复盘 + 下午点位计划"
     focus_markets: ["CN", "HK"]
     send_to_discord: true
+    trade_plan_mode: "trade_levels"
     include_candidate_set: true
+    short_block_size: 8
+    coverage_watch_size: 3
     strict_send_requires_tradable: true
     emit_short_block: true
     emit_swing_block: false
@@ -51,12 +57,13 @@ sessions:
     caption: "A/HK开盘前优先盯盘 · 动量 + 赛道共振"
     focus_markets: ["CN", "HK"]
     send_to_discord: true
+    trade_plan_mode: "watchlist_only"
     workflow_role: "ah_open_watchlist"
     brief_mode: "watchlist"
     short_block_source: "watchlist"
     include_candidate_set: true
     include_swing_in_watchlist: false
-    short_block_size: 5
+    short_block_size: 8
     coverage_watch_size: 3
     strict_send_requires_tradable: false
     emit_short_block: true
@@ -82,7 +89,10 @@ sessions:
     caption: "14:30 后确认承接、风控和目标"
     focus_markets: ["CN", "HK"]
     send_to_discord: true
+    trade_plan_mode: "trade_levels"
     include_candidate_set: true
+    short_block_size: 8
+    coverage_watch_size: 3
     strict_send_requires_tradable: false
     emit_short_block: true
     emit_swing_block: false
@@ -107,12 +117,13 @@ sessions:
     caption: "20:30 盯盘清单：今日强赛道 + 美股重点ticker"
     focus_markets: ["US"]
     send_to_discord: true
+    trade_plan_mode: "watchlist_only"
     workflow_role: "us_prep_watchlist"
     brief_mode: "watchlist"
     short_block_source: "watchlist"
     include_candidate_set: true
     include_swing_in_watchlist: true
-    short_block_size: 5
+    short_block_size: 8
     coverage_watch_size: 3
     strict_send_requires_tradable: false
     emit_short_block: true
@@ -138,7 +149,10 @@ sessions:
     caption: "美股盘中 15m 确认 + 点位计划"
     focus_markets: ["US"]
     send_to_discord: true
+    trade_plan_mode: "trade_levels"
     include_candidate_set: true
+    short_block_size: 8
+    coverage_watch_size: 3
     strict_send_requires_tradable: false
     emit_short_block: true
     emit_swing_block: false

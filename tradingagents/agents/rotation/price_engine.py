@@ -151,6 +151,9 @@ def build_target_plan(item: dict[str, Any]) -> dict[str, Any]:
         return {"complete": True, "method": "prior_high", "target_source": "prior_high", "targets": targets}
 
     support = _positive_float(three_locks.get("support_level"))
+    # ponytail: daily support is background when it is too far from the live tape.
+    if support is not None and abs(current - support) / current > 0.08:
+        support = None
     swing_low = _positive_float(item.get("swing_low")) or support or max(current - 3 * atr, current * 0.9)
     swing_high = _positive_float(item.get("swing_high")) or high_20d or current
     pullback_low = _positive_float(item.get("pullback_low")) or support or max(current - atr, swing_low)
@@ -172,10 +175,15 @@ def build_trade_level_plan(item: dict[str, Any]) -> dict[str, Any]:
     current = _positive_float(item.get("current_price")) or 0.0
     if current <= 0:
         return {"complete": False, "target_plan": {"complete": False, "target_source": "unavailable", "targets": []}}
+    price_source = str(item.get("price_source") or "daily_structure")
     three_locks = item.get("three_locks") if isinstance(item.get("three_locks"), dict) else {}
     support = _positive_float(three_locks.get("support_level"))
     pressure = _positive_float(three_locks.get("pressure_level"))
     atr = _positive_float(item.get("atr14")) or current * (_positive_float(item.get("atr_pct")) or 0.03)
+    if support is not None and abs(current - support) / current > 0.08:
+        support = None
+    if pressure is not None and abs(pressure - current) / current > 0.08:
+        pressure = None
     buy_level = support if support and support < current else current * 0.995
     confirm_buy = pressure if pressure and pressure > current else current + 0.6 * atr
     add_level = max(confirm_buy + 0.35 * atr, current + 0.9 * atr)
@@ -184,6 +192,7 @@ def build_trade_level_plan(item: dict[str, Any]) -> dict[str, Any]:
     complete = all(value > 0 for value in (buy_level, confirm_buy, add_level, stop_loss)) and bool(target_plan.get("complete"))
     return {
         "complete": complete,
+        "price_source": price_source,
         "buy_level": round(buy_level, 4),
         "confirm_buy": round(confirm_buy, 4),
         "add_level": round(add_level, 4),

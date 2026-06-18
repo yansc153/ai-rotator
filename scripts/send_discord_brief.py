@@ -156,6 +156,8 @@ DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
 PLAYBOOK_RENDER_LIMIT = 10
 DANGER_RENDER_LIMIT = 1
+VISIBLE_CANDIDATE_MIN = 5
+TRADE_LEVEL_PRICE_SOURCES = {"intraday_15m", "premarket_live"}
 THREE_LOCK_LABELS = {
     "triple_lock": "日线强确认",
     "double_lock": "日线确认",
@@ -524,18 +526,17 @@ def _holding_plan(session: str) -> str:
 
 
 def _can_render_trade_plan(item: dict[str, Any], session: str) -> bool:
-    if item.get("trade_language_allowed") and item.get("push_decision") == "tradable_now":
-        return True
-    if session not in {"morning", "ah_open"} or item.get("push_decision") == "rejected":
+    meta = _session_meta(session)
+    if meta.get("trade_plan_mode") != "trade_levels":
         return False
-    return all(
-        [
-            item.get("concept_verified"),
-            item.get("market_cap_ok", True),
-            item.get("daily_allowed"),
-            item.get("risk_levels_complete"),
-        ]
-    )
+    if not (item.get("trade_language_allowed") and item.get("push_decision") == "tradable_now"):
+        return False
+    levels = item.get("trade_levels", {}) if isinstance(item.get("trade_levels"), dict) else {}
+    if levels.get("price_source") not in TRADE_LEVEL_PRICE_SOURCES:
+        return False
+    current = float(item.get("intraday_current_price") or item.get("current_price") or 0.0)
+    buy = float(levels.get("buy_level") or 0.0)
+    return bool(current > 0 and buy > 0 and abs(current - buy) / current <= 0.08)
 
 
 def _resolve_a_stock_board(symbol: str, market_board: str | None, market: str) -> str:
@@ -658,6 +659,8 @@ def _bucket_line(item: dict[str, Any]) -> dict[str, Any]:
         "trade_language_allowed": item.get("trade_language_allowed"),
         "trade_levels": item.get("trade_levels", {}),
         "target_plan": item.get("target_plan", {}),
+        "price_source": item.get("price_source"),
+        "intraday_current_price": item.get("intraday_current_price"),
     }
 
 
@@ -1497,6 +1500,23 @@ def _append_bucket_lines(lines: list[str], title: str, items: list[dict[str, Any
         lines.append(f"另 {len(items)-max_items} 只见内部记录。")
 
 
+def _fill_visible_candidates(payload: dict[str, Any], base: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen = {_item_key(item) for item in base}
+    out = list(base)
+    for pool_name in ("short_block", "coverage_watch", "watch_only"):
+        for item in payload.get(pool_name, []) or []:
+            if not isinstance(item, dict):
+                continue
+            key = _item_key(item)
+            if not key[0] or not key[1] or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+            if len(out) >= PLAYBOOK_RENDER_LIMIT:
+                return out
+    return out
+
+
 def _three_locks_summary(classified: list[dict[str, Any]]) -> str:
     counts = {label: 0 for label in THREE_LOCK_LABELS.values()}
     for item in classified:
@@ -1531,7 +1551,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     premarket_open_sell = [item for item in buckets.get("premarket_open_sell", []) if isinstance(item, dict)]
     intraday_dip_reversal = [item for item in buckets.get("intraday_dip_reversal", []) if isinstance(item, dict)]
     overheat_failure_short = [item for item in buckets.get("overheat_failure_short", []) if isinstance(item, dict)]
-    candidates = premarket_open_sell + intraday_dip_reversal
+    candidates = _fill_visible_candidates(payload, premarket_open_sell + intraday_dip_reversal)
     board_sections = _board_sections(candidates, session)
     if board_sections:
         for key, group_items in board_sections:
@@ -1540,6 +1560,9 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
         _append_bucket_lines(lines, "今日交易计划", candidates, max_items=PLAYBOOK_RENDER_LIMIT, session=session)
     if overheat_failure_short:
         _append_bucket_lines(lines, "风险观察", overheat_failure_short, max_items=DANGER_RENDER_LIMIT, session=session)
+
+    if 0 < len(candidates) < VISIBLE_CANDIDATE_MIN:
+        lines.append(f"\n候选不足 {VISIBLE_CANDIDATE_MIN} 个：通过 fresh/concept/market-cap gate 后只剩 {len(candidates)} 个。")
 
     if not premarket_open_sell and not intraday_dip_reversal and not overheat_failure_short:
         tradable_now = [item for item in payload.get("tradable_now", []) if item.get("trade_language_allowed")]

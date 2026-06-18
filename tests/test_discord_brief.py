@@ -109,6 +109,7 @@ def _fake_rotation_payloads() -> dict[str, dict]:
         "three_locks": {"status": "invalid", "score": 10.0, "support_level": 9.2, "pressure_level": 11.2, "reason": "跌破支撑"},
         "ret_5d": 0.03,
         "current_price": 10.0,
+        "intraday_current_price": 10.0,
         "market_cap": 250.0,
         "plan": {"entry_tranches": [9.8, 9.2, 8.6], "target_1": 12.5, "target_2": 13.8, "stop_loss": 8.9},
         "thesis": "CN swing",
@@ -263,6 +264,7 @@ def test_trade_card_requires_company_name_and_level_sources():
                     "trade_style": "强势确认",
                     "execution_score": 88.0,
                     "current_price": 120.0,
+                    "intraday_current_price": 120.0,
                         "ret_5d": 0.08,
                         "company_concept": "AI芯片",
                         "ai_relationship": "核心/直接 AI",
@@ -275,6 +277,7 @@ def test_trade_card_requires_company_name_and_level_sources():
                         "intraday_triggered": True,
                         "risk_levels_complete": True,
                         "trade_levels": {
+                            "price_source": "intraday_15m",
                             "buy_level": 116.0,
                             "confirm_buy": 125.0,
                         "add_level": 128.0,
@@ -465,7 +468,7 @@ def test_evening_watchlist_fills_from_candidate_set_to_five():
          patch("send_discord_brief._earnings_payload_status", return_value=({}, "absent")):
         payload = build_brief_payload("2026-05-05", "evening")
 
-    assert len(payload["short_block"]) == 5
+    assert 5 <= len(payload["short_block"]) <= 10
     assert any(item["symbol"].startswith("USAI") for item in payload["short_block"])
 
 
@@ -907,6 +910,7 @@ def test_brief_renders_up_to_ten_trade_plan_names():
         "market_cap_ok": True,
         "trade_language_allowed": True,
         "trade_levels": {
+            "price_source": "intraday_15m",
             "buy_level": 10.0,
             "confirm_buy": 10.2,
             "add_level": 10.4,
@@ -948,7 +952,7 @@ def test_brief_renders_up_to_ten_trade_plan_names():
     assert "周期：15m级别，预计 0.5-2h；目标/止损先到先处理" in text
 
 
-def test_morning_watch_only_can_render_preopen_trade_plan_levels():
+def test_morning_watch_only_does_not_render_trade_plan_levels():
     item = {
         "symbol": "688256.SH",
         "market": "CN",
@@ -997,10 +1001,61 @@ def test_morning_watch_only_can_render_preopen_trade_plan_levels():
 
     text = build_brief_text("2026-05-05", "morning", payload=payload)
 
-    assert "今日交易计划｜A股·科创板" in text
-    assert "买入 116.00｜确认 125.00｜加仓 128.00｜止损 112.00" in text
-    assert "卖出/减仓：T1 132.00（前高/日线压力）；T2 138.00（压力突破后一倍 ATR）｜算法 prior_high" in text
-    assert "周期：开盘后 15m 触发，预计 0.5-2h；未触发不做" in text
+    assert "等待触发｜A股·科创板" in text
+    assert "买入 116.00" not in text
+    assert "止损 112.00" not in text
+    assert "等：强势板块里的强标的" in text
+
+
+def test_evening_does_not_render_executable_trade_levels_for_stx_style_gap():
+    item = {
+        "symbol": "STX",
+        "market": "US",
+        "company_name": "Seagate Technology Holdings PLC",
+        "sector": "存储",
+        "current_price": 1105.11,
+        "intraday_current_price": 1105.11,
+        "execution_score": 90.0,
+        "push_decision": "tradable_now",
+        "reason": "强势板块里的强标的",
+        "market_board": "美股",
+        "company_concept": "存储",
+        "ai_relationship": "核心/直接 AI",
+        "concept_verified": True,
+        "market_cap_ok": True,
+        "trade_language_allowed": True,
+        "trade_levels": {
+            "price_source": "daily_structure",
+            "buy_level": 891.80,
+            "confirm_buy": 1105.11,
+            "add_level": 1127.88,
+            "stop_loss": 862.52,
+        },
+        "target_plan": {"target_source": "fib_extension", "targets": []},
+    }
+    payload = {
+        "date": "2026-06-18",
+        "session": "evening",
+        "leaders": ["存储"],
+        "fresh_gate": {"ok": True},
+        "status_only": False,
+        "opportunity_buckets": {
+            "premarket_open_sell": [item],
+            "intraday_dip_reversal": [],
+            "overheat_failure_short": [],
+        },
+        "short_block": [],
+        "swing_block": [],
+        "coverage_watch": [],
+    }
+
+    text = build_brief_text("2026-06-18", "evening", payload=payload)
+
+    assert "买入 891.80" not in text
+    assert "加仓 1127.88" not in text
+    assert "止损 862.52" not in text
+    assert "STX" in text
+    assert "现价 1105.11" in text
 
 
 def test_data_limited_earnings_title_changes():

@@ -64,6 +64,47 @@ def test_us_rth_confirm_requires_fresh_intraday():
     assert meta["require_fresh_intraday"] is True
 
 
+def test_trade_levels_use_latest_fresh_15m_close(tmp_path, monkeypatch):
+    (tmp_path / "US_NVDA_15m.csv").write_text(
+        "datetime,open,high,low,close,volume\n"
+        "2026-05-05 09:30:00,1000,1005,995,1000,100\n"
+        "2026-05-05 09:45:00,1100,1110,1090,1105,100\n"
+    )
+    monkeypatch.setattr(execution_filter, "RAW_DATA_DIR", tmp_path)
+    candidate = _base_candidate(
+        current_price=900.0,
+        atr14=20.0,
+        three_locks={"status": "double_lock", "support_level": 891.8, "pressure_level": 1300.0},
+    )
+    with patch(
+        "tradingagents.agents.rotation.execution_filter.verify_company_concept",
+        return_value={
+            "company_concept": "GPU",
+            "concept_verified": True,
+            "concept_status": "verified",
+            "concept_source": "test",
+            "concept_source_url": None,
+            "concept_evidence_date": "2026-05-05",
+            "concept_confidence": 0.9,
+            "ai_relationship": "核心/直接 AI",
+            "ai_relevance": "core_ai",
+        },
+    ):
+        decision = classify_candidate(
+            candidate,
+            session="us_rth_confirm",
+            trade_date="2026-05-05",
+            active_sector_ids=["GPU"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+
+    assert decision["price_source"] == "intraday_15m"
+    assert decision["intraday_current_price"] == 1105.0
+    assert decision["trade_levels"]["price_source"] == "intraday_15m"
+    assert decision["trade_levels"]["buy_level"] > 1000.0
+
+
 def test_midday_missing_intraday_downgrades_to_watch_only():
     candidate = _base_candidate(market="CN", symbol="688256.SH", sector="AI芯片")
     with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:

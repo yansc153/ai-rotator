@@ -124,6 +124,22 @@ def build_freshness_record(market: str, symbol: str, session: str, trade_date: s
         )
 
 
+def _latest_intraday_close(market: str, symbol: str, trade_date: str) -> float | None:
+    normalized = normalize_symbol_for_file(market, symbol)
+    path = RAW_DATA_DIR / f"{market}_{normalized}_15m.csv"
+    if not path.exists():
+        return None
+    try:
+        frame = pd.read_csv(path)
+        today_bars = frame[frame["datetime"].astype(str).str.startswith(trade_date)]
+        if today_bars.empty or "close" not in today_bars.columns:
+            return None
+        value = float(today_bars.iloc[-1]["close"])
+        return value if value > 0 else None
+    except Exception:
+        return None
+
+
 def build_freshness_manifest(items: list[dict[str, Any]], session: str, trade_date: str) -> list[dict[str, Any]]:
     seen: set[tuple[str, str]] = set()
     records: list[dict[str, Any]] = []
@@ -284,7 +300,16 @@ def classify_candidate(
     if three_locks.get("breakdown_support"):
         invalid_if.append("three_locks_support_break")
 
-    trade_levels = build_trade_level_plan({**item, "three_locks": three_locks})
+    price_source = "daily_structure"
+    level_item = {**item, "three_locks": three_locks, "price_source": price_source}
+    intraday_close = None
+    if freshness.intraday_status == "fresh":
+        intraday_close = _latest_intraday_close(item["market"], item["symbol"], trade_date)
+        if intraday_close is not None:
+            price_source = "intraday_15m"
+            level_item["current_price"] = intraday_close
+            level_item["price_source"] = price_source
+    trade_levels = build_trade_level_plan(level_item)
     intraday_triggered = (freshness.intraday_status == "fresh" or not intraday_required) and horizon == "short"
     fresh_data = freshness.intraday_status == "fresh" or not intraday_required
     risk_levels_complete = bool(trade_levels.get("complete"))
@@ -328,6 +353,8 @@ def classify_candidate(
         "invalid_if": invalid_if,
         "freshness_status": freshness.intraday_status,
         "freshness_record": freshness.model_dump(),
+        "price_source": price_source,
+        "intraday_current_price": intraday_close,
         "catalyst_status": c_status,
         "a_share_board": ashare_board(item.get("symbol", ""), item.get("market")),
         "market_board": market_board_label(item.get("symbol", ""), item.get("market", "")),
