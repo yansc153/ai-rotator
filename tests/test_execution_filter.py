@@ -274,3 +274,32 @@ def test_trade_language_gate_requires_all_hard_gates():
     assert decision["trade_language_allowed"] is True
     assert decision["market_board"] == "A股·科创板"
     assert decision["target_plan"]["target_source"] in {"prior_high", "fib_extension"}
+
+
+def test_morning_trade_plan_does_not_require_same_day_intraday_bar():
+    candidate = _base_candidate(
+        market="CN",
+        symbol="688256.SH",
+        sector="AI芯片",
+        market_cap=250.0,
+        three_locks={"status": "double_lock", "score": 66.0, "support_level": 116.0, "pressure_level": 125.0},
+    )
+    with patch("tradingagents.agents.rotation.execution_filter.build_freshness_record") as mocked:
+        mocked.return_value = build_freshness_record("CN", "688256.SH", "morning", "2026-05-05").model_copy(
+            update={"intraday_status": "stale", "source_path": "/tmp/yesterday_15m.csv"}
+        )
+        decision = classify_candidate(
+            candidate,
+            session="morning",
+            trade_date="2026-05-05",
+            active_sector_ids=["AI芯片"],
+            earnings_index={},
+            earnings_state="absent",
+        )
+
+    assert decision["push_decision"] == "tradable_now"
+    assert decision["trade_language_allowed"] is True
+    assert decision["fresh_data"] is True
+    assert decision["intraday_triggered"] is True
+    assert "intraday_stale" not in decision["reason_codes"]
+    assert "intraday_stale" not in decision["invalid_if"]

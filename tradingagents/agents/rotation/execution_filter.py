@@ -273,7 +273,7 @@ def classify_candidate(
 
     if active_sector:
         invalid_if.append("sector_leader_breaks")
-    if freshness.intraday_status != "fresh":
+    if intraday_required and freshness.intraday_status != "fresh":
         invalid_if.append(f"intraday_{freshness.intraday_status}")
     if c_status in {"stale", "absent", "data_limited"} and _uses_us_catalyst_gate(session, item):
         invalid_if.append(f"catalyst_{c_status}")
@@ -285,8 +285,8 @@ def classify_candidate(
         invalid_if.append("three_locks_support_break")
 
     trade_levels = build_trade_level_plan({**item, "three_locks": three_locks})
-    intraday_triggered = freshness.intraday_status == "fresh" and horizon == "short"
-    fresh_data = freshness.intraday_status == "fresh"
+    intraday_triggered = (freshness.intraday_status == "fresh" or not intraday_required) and horizon == "short"
+    fresh_data = freshness.intraday_status == "fresh" or not intraday_required
     risk_levels_complete = bool(trade_levels.get("complete"))
     trade_language_allowed = all(
         [
