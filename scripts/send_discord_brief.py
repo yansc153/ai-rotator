@@ -143,7 +143,8 @@ def _sector_cn(code: str) -> str:
 
 DISCORD_API_HOST = "https://discord.com/api/v10"
 DISCORD_MESSAGE_LIMIT = 2000
-DANGER_RENDER_LIMIT = 5
+PLAYBOOK_RENDER_LIMIT = 3
+DANGER_RENDER_LIMIT = 3
 MARKET_SECTION_ORDER = ("US", "HK", "CN")
 MARKET_SECTION_LABELS = {"US": "美股专区", "HK": "港股专区", "CN": "A股专区"}
 THREE_LOCK_LABELS = {
@@ -1311,6 +1312,13 @@ def _fmt_bucket_item(item: dict[str, Any]) -> str:
     )
 
 
+def _hidden_playbook_line(items: list[dict[str, Any]]) -> str:
+    symbols = [str(item.get("symbol")) for item in items if item.get("symbol")]
+    if len(symbols) <= 6 and symbols:
+        return f"其余 {len(items)} 只：{', '.join(symbols)} 已进内部记录，Discord 不展开。"
+    return f"其余 {len(items)} 只已进内部记录，Discord 不展开。"
+
+
 def _fmt_review_pct(value: Any) -> str:
     if value is None:
         return "暂无"
@@ -1450,33 +1458,42 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
         lines += [
             "",
             f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
-            "规则：日线结构 + AI 赛道轮动 + 盘前/开盘承接强；只看确认后的延续。",
+            "规则：只看确认后的延续。",
         ]
         if premarket_open_sell:
-            for idx, item in enumerate(premarket_open_sell, start=1):
+            visible = premarket_open_sell[:PLAYBOOK_RENDER_LIMIT]
+            for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+            if len(premarket_open_sell) > len(visible):
+                lines.append(_hidden_playbook_line(premarket_open_sell[len(visible):]))
         else:
             lines.append("无达标标的，不硬做。")
 
         lines += [
             "",
             f"▌ 回踩确认｜下午承接 (共{len(intraday_dip_reversal)}只)",
-            "规则：不追直线拉升；只看回到支撑/VWAP/开盘区间附近后仍有承接。",
+            "规则：只看回到支撑附近仍有承接。",
         ]
         if intraday_dip_reversal:
-            for idx, item in enumerate(intraday_dip_reversal, start=1):
+            visible = intraday_dip_reversal[:PLAYBOOK_RENDER_LIMIT]
+            for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+            if len(intraday_dip_reversal) > len(visible):
+                lines.append(_hidden_playbook_line(intraday_dip_reversal[len(visible):]))
         else:
             lines.append("无达标标的，不硬做。")
 
         lines += [
             "",
             f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
-            "规则：涨幅过大后跌破 VWAP/开盘区间、且相对指数转弱，才进入风险观察。",
+            "规则：转弱确认才列风险。",
         ]
         if overheat_failure_short:
-            for idx, item in enumerate(overheat_failure_short, start=1):
+            visible = overheat_failure_short[:PLAYBOOK_RENDER_LIMIT]
+            for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+            if len(overheat_failure_short) > len(visible):
+                lines.append(_hidden_playbook_line(overheat_failure_short[len(visible):]))
         else:
             lines.append("无达标标的，不硬做。")
 
@@ -1485,8 +1502,11 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
             f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
         ]
         if radar_watch:
-            for idx, item in enumerate(radar_watch, start=1):
+            visible = radar_watch[:PLAYBOOK_RENDER_LIMIT]
+            for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
+            if len(radar_watch) > len(visible):
+                lines.append(_hidden_playbook_line(radar_watch[len(visible):]))
         else:
             lines.append("无达标观察项。")
 

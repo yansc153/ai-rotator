@@ -761,11 +761,11 @@ def test_danger_pool_is_summarized_for_discord():
 
     text = build_brief_text("2026-05-05", "tail_close", payload=payload)
 
-    assert "只展示前5个风险样本" in text
+    assert "只展示前3个风险样本" in text
     assert "D0" in text
-    assert "D4" in text
-    assert "D5" not in text
-    assert "其余 2 只已进内部记录" in text
+    assert "D2" in text
+    assert "D3" not in text
+    assert "其余 4 只已进内部记录" in text
 
 
 def test_data_limited_earnings_title_changes():
