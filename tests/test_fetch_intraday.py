@@ -130,39 +130,47 @@ def test_main_prefers_ipv4_before_fetching(monkeypatch):
 def test_fetch_cn_intraday_writes_15m_file(monkeypatch, tmp_path):
     captured = {}
 
-    def fake_fetch(**kwargs):
+    def fake_fetch(symbol, **kwargs):
+        captured["symbol"] = symbol
         captured.update(kwargs)
         return [{"datetime": "2026-06-18 14:15:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 100}]
 
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
-    monkeypatch.setattr(intraday.skill_market_data, "mootdx_cn_bars", fake_fetch)
+    monkeypatch.delenv("CN_INTRADAY_SOURCE", raising=False)
+    monkeypatch.setattr(intraday.skill_market_data, "yahoo_chart", fake_fetch)
 
     assert intraday.fetch_cn_intraday("688256.SH") is True
-    assert captured == {"code": "688256", "category": 9, "offset": 120}
+    assert captured["symbol"] == "688256.SS"
+    assert captured["interval"] == "15m"
     assert (tmp_path / "CN_688256_15m.csv").exists()
 
 
-def test_fetch_cn_intraday_wraps_source_timeout(monkeypatch, tmp_path):
+def test_fetch_cn_intraday_can_use_mootdx_when_enabled(monkeypatch, tmp_path):
     captured = {}
 
     def fake_timeout(timeout_s, func, **kwargs):
         captured["timeout_s"] = timeout_s
         return func(**kwargs)
 
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return [{"datetime": "2026-06-18 14:15:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 100}]
+
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.setenv("CN_INTRADAY_SOURCE", "mootdx")
     monkeypatch.setattr(intraday, "_run_with_timeout", fake_timeout)
-    monkeypatch.setattr(
-        intraday.skill_market_data,
-        "mootdx_cn_bars",
-        lambda **kwargs: [{"datetime": "2026-06-18 14:15:00", "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 100}],
-    )
+    monkeypatch.setattr(intraday.skill_market_data, "mootdx_cn_bars", fake_fetch)
 
     assert intraday.fetch_cn_intraday("688256.SH") is True
     assert captured["timeout_s"] == intraday._CNHK_TIMEOUT_S
+    assert captured["code"] == "688256"
+    assert captured["category"] == 9
 
 
-def test_fetch_cn_intraday_returns_false_when_mootdx_fails(monkeypatch, tmp_path):
+def test_fetch_cn_intraday_returns_false_when_sources_fail(monkeypatch, tmp_path):
     monkeypatch.setattr(intraday, "RAW_DIR", tmp_path)
+    monkeypatch.delenv("CN_INTRADAY_SOURCE", raising=False)
+    monkeypatch.setattr(intraday.skill_market_data, "yahoo_chart", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("yahoo down")))
     monkeypatch.setattr(intraday.skill_market_data, "mootdx_cn_bars", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("mootdx down")))
 
     assert intraday.fetch_cn_intraday("688256.SH") is False

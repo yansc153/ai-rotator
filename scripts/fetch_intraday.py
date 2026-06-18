@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import socket
 import sys
@@ -126,6 +127,19 @@ def _yahoo_symbol(market: str, symbol: str) -> str:
 
 def fetch_cn_intraday(symbol: str) -> bool:
     raw = symbol.split(".")[0]
+    source = os.environ.get("CN_INTRADAY_SOURCE", "yahoo").lower()
+    if source != "mootdx":
+        try:
+            return _write_rows(
+                "CN",
+                raw,
+                skill_market_data.yahoo_chart(_yahoo_symbol("CN", symbol), interval="15m", range_="5d", timeout=_CNHK_TIMEOUT_S),
+                "yahoo_chart",
+            )
+        except Exception as exc:
+            print(f"  CN {raw}: yahoo fallback FAILED — {exc}", flush=True)
+            return False
+
     try:
         rows = _run_with_timeout(_CNHK_TIMEOUT_S, skill_market_data.mootdx_cn_bars, code=raw, category=9, offset=120)
         return _write_rows("CN", raw, rows, "mootdx")
