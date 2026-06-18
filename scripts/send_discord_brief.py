@@ -751,10 +751,9 @@ def _build_market_state(
 
     summary = (
         f"当前更像{regime}，主线状态为{mainline_health}，宽度表现为{breadth}。"
-        f"今日观察方向：开盘强势 {len(premarket_open_sell)} 个，"
+        f"今日可看：开盘强势 {len(premarket_open_sell)} 个，"
         f"回踩承接 {len(intraday_dip_reversal)} 个，"
-        f"过热转弱 {len(overheat_failure_short)} 个；"
-        f"观察雷达 {len(radar_watch)} 个，禁区池 {len(danger_pool)} 个。"
+        f"过热转弱 {len(overheat_failure_short)} 个。"
         f"行动倾向：{action_bias}；不满足触发就不做。"
     )
 
@@ -1408,9 +1407,11 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     lines = [
         f"{meta['label']} · {date_str}",
         f"({meta['caption']})",
-        f"今日领涨赛道：{cn_leaders}",
-        f"跨市场信号：{signal_text}",
     ]
+    if session != "tail_close":
+        lines.append(f"今日领涨赛道：{cn_leaders}")
+    if signal_text != "无跨市场信号":
+        lines.append(f"跨市场信号：{signal_text}")
     if staleness:
         lines.append(staleness)
     market_sections = payload.get("market_sections", {})
@@ -1432,11 +1433,11 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
             "▌ 30秒决策版",
             market_state.get("summary", "等待最新数据确认。"),
         ]
-        if payload.get("three_locks_summary"):
+        if payload.get("three_locks_summary") and session != "tail_close":
             lines.append(payload["three_locks_summary"])
 
     review_payload = payload.get("signal_review", {})
-    if isinstance(review_payload, dict):
+    if isinstance(review_payload, dict) and session != "tail_close":
         recent_review = review_payload.get("recent")
         if isinstance(recent_review, dict):
             _append_review_section(lines, "近三日信号复盘｜从推送价直接算", recent_review)
@@ -1449,24 +1450,26 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
     overheat_failure_short = buckets.get("overheat_failure_short", [])
     radar_watch = buckets.get("radar_watch", [])
     if has_playbook_buckets:
-        lines += [
-            "",
-            f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
-            "规则：只看确认后的延续。",
-        ]
         if premarket_open_sell:
+            lines += [
+                "",
+                f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
+            ]
             visible = premarket_open_sell[:PLAYBOOK_RENDER_LIMIT]
             for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
             if len(premarket_open_sell) > len(visible):
                 lines.append(_hidden_playbook_line(premarket_open_sell[len(visible):]))
-        else:
+        elif session != "tail_close":
+            lines += [
+                "",
+                f"▌ 强势确认｜开盘承接 (共{len(premarket_open_sell)}只)",
+            ]
             lines.append("无达标标的，不硬做。")
 
         lines += [
             "",
             f"▌ 回踩确认｜下午承接 (共{len(intraday_dip_reversal)}只)",
-            "规则：只看回到支撑附近仍有承接。",
         ]
         if intraday_dip_reversal:
             visible = intraday_dip_reversal[:PLAYBOOK_RENDER_LIMIT]
@@ -1477,31 +1480,38 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
         else:
             lines.append("无达标标的，不硬做。")
 
-        lines += [
-            "",
-            f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
-            "规则：转弱确认才列风险。",
-        ]
         if overheat_failure_short:
+            lines += [
+                "",
+                f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
+            ]
             visible = overheat_failure_short[:PLAYBOOK_RENDER_LIMIT]
             for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
             if len(overheat_failure_short) > len(visible):
                 lines.append(_hidden_playbook_line(overheat_failure_short[len(visible):]))
-        else:
+        elif session != "tail_close":
+            lines += [
+                "",
+                f"▌ 过热转弱｜风险观察 (共{len(overheat_failure_short)}只)",
+            ]
             lines.append("无达标标的，不硬做。")
 
-        lines += [
-            "",
-            f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
-        ]
         if radar_watch:
+            lines += [
+                "",
+                f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
+            ]
             visible = radar_watch[:PLAYBOOK_RENDER_LIMIT]
             for idx, item in enumerate(visible, start=1):
                 lines.append(f"#{idx} {_fmt_bucket_item(item)}")
             if len(radar_watch) > len(visible):
                 lines.append(_hidden_playbook_line(radar_watch[len(visible):]))
-        else:
+        elif session != "tail_close":
+            lines += [
+                "",
+                f"▌ 雷达｜高波动观察 (共{len(radar_watch)}只)",
+            ]
             lines.append("无达标观察项。")
 
     if market_sections:
@@ -1548,7 +1558,7 @@ def build_brief_text(date_str: str, session: str = "morning", payload: dict[str,
             lines.append(f"#{idx} {_fmt_bucket_item(item)}")
 
     danger_pool = payload.get("danger_pool", [])
-    if danger_pool:
+    if danger_pool and session != "tail_close":
         visible_danger = danger_pool[:DANGER_RENDER_LIMIT]
         hidden_count = len(danger_pool) - len(visible_danger)
         lines += [

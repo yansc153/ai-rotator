@@ -737,7 +737,7 @@ def test_danger_pool_is_summarized_for_discord():
     ]
     payload = {
         "date": "2026-05-05",
-        "session": "tail_close",
+        "session": "midday",
         "leaders": ["AI芯片"],
         "cross_market_signal": {"narrative": "无跨市场信号"},
         "fresh_gate": {"ok": True},
@@ -759,13 +759,93 @@ def test_danger_pool_is_summarized_for_discord():
         "coverage_watch": [],
     }
 
-    text = build_brief_text("2026-05-05", "tail_close", payload=payload)
+    text = build_brief_text("2026-05-05", "midday", payload=payload)
 
     assert "只展示前3个风险样本" in text
     assert "D0" in text
     assert "D2" in text
     assert "D3" not in text
     assert "其余 4 只已进内部记录" in text
+
+
+def test_tail_close_omits_non_trader_context():
+    payload = {
+        "date": "2026-05-05",
+        "session": "tail_close",
+        "leaders": ["新能源车", "电子"],
+        "cross_market_signal": {"narrative": "无跨市场信号"},
+        "fresh_gate": {"ok": True},
+        "status_only": False,
+        "market_state": {"summary": "今日可看：回踩承接 1 个，过热转弱 0 个。行动倾向：只做确认。"},
+        "three_locks_summary": "日线结构：日线确认 81 个",
+        "signal_review": {
+            "recent": {
+                "window": "近3日",
+                "signal_count": 10,
+                "priced_count": 10,
+                "win_rate": 0.5,
+                "avg_return_pct": 0.01,
+            }
+        },
+        "opportunity_buckets": {
+            "premarket_open_sell": [],
+            "intraday_dip_reversal": [
+                {
+                    "symbol": "001287.SZ",
+                    "market": "CN",
+                    "company_name": "中电港",
+                    "market_board": "A股·深主板",
+                    "sector": "AI芯片",
+                    "trade_style": "边缘观察",
+                    "execution_score": 28,
+                    "current_price": 29.78,
+                    "ret_5d": 0.167,
+                    "company_concept": "人工智能",
+                    "ai_relationship": "核心/直接 AI",
+                    "concept_verified": True,
+                    "market_cap_ok": True,
+                    "reason": "只看 26.07 附近是否有承接",
+                }
+            ],
+            "overheat_failure_short": [],
+            "radar_watch": [],
+        },
+        "market_sections": {},
+        "danger_pool": [
+            {
+                "symbol": "02028.HK",
+                "market": "HK",
+                "company_name": "映美控股",
+                "sector": "电子信息",
+                "trade_style": "回避",
+                "execution_score": 65,
+                "current_price": 0.8,
+                "ret_5d": -0.059,
+                "company_concept": "电子信息",
+                "ai_relationship": "未核验到明确 AI 主业",
+                "concept_verified": False,
+                "market_cap_ok": False,
+                "reason": "concept_unverified",
+            }
+        ],
+        "mapping_chain": [],
+        "open_script": [],
+        "short_block": [],
+        "swing_block": [],
+        "coverage_watch": [],
+    }
+
+    text = build_brief_text("2026-05-05", "tail_close", payload=payload)
+
+    assert "今日领涨赛道" not in text
+    assert "跨市场信号" not in text
+    assert "近三日信号复盘" not in text
+    assert "日线结构" not in text
+    assert "强势确认｜开盘承接" not in text
+    assert "雷达｜高波动观察" not in text
+    assert "禁区池" not in text
+    assert "001287.SZ" in text
+    assert "02028.HK" not in text
 
 
 def test_data_limited_earnings_title_changes():
