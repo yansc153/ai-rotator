@@ -48,6 +48,20 @@ def test_accepted_trade_dates_allows_us_holiday_gap():
     assert "2026-05-22" in daily._accepted_trade_dates("US", tuesday_after_us_holiday)
 
 
+def test_accepted_trade_dates_allows_cn_preopen_holiday_gap():
+    monday_preopen_after_holiday = datetime(2026, 6, 22, 8, 45, tzinfo=timezone(timedelta(hours=8)))
+    assert "2026-06-18" in daily._accepted_trade_dates(
+        "CN",
+        monday_preopen_after_holiday,
+        session="ah_open",
+    )
+
+
+def test_accepted_trade_dates_keeps_cn_midday_strict():
+    monday_midday = datetime(2026, 6, 22, 12, 30, tzinfo=timezone(timedelta(hours=8)))
+    assert daily._accepted_trade_dates("CN", monday_midday, session="midday") == {"2026-06-22"}
+
+
 def test_effective_market_coverage_accepts_previous_business_day_cache():
     conn = _mk_conn()
     conn.executemany(

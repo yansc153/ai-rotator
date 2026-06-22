@@ -92,6 +92,11 @@ def _accepted_trade_dates(
         return {str(current)}
     if market == "HK" and session == "tail_close":
         return {str(current)}
+    if market in {"CN", "HK"}:
+        # Pre-open sessions can only use the latest completed session. Keep a
+        # short window so exchange holidays do not mark fresh-enough pre-open
+        # data as degraded; midday/tail_close stay strict above.
+        return {str(current), *(str(day) for day in _previous_business_days(current, 3))}
     if market == "US":
         # US holidays are not captured by a simple weekday calendar. Accept a
         # short prior-business-day window so Monday holidays still use Friday's
